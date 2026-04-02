@@ -2,6 +2,19 @@
 
 import { useState, useEffect, useRef, useCallback } from 'react'
 
+/* ── Types ─────────────────────────────────────────────────────── */
+
+interface ResourceMeta {
+  key: string
+  label: string
+  category: string
+}
+
+interface CategoryMeta {
+  key: string
+  label: string
+}
+
 interface SyncStatus {
   hasCredentials: boolean
   lastSync: {
@@ -12,32 +25,35 @@ interface SyncStatus {
     error_message: string | null
     details: Record<string, any> | null
   } | null
-  pcoLastSync: string | null
-  counts: { people: number; groups: number; teams: number }
+  counts: Record<string, number>
+  categories: CategoryMeta[]
+  resources: ResourceMeta[]
+}
+
+interface ResourceProgress {
+  synced: number
+  total: number
 }
 
 interface SyncProgress {
-  phase: 'starting' | 'people' | 'groups' | 'teams' | 'finishing' | 'done' | 'error'
-  currentResource: string
-  recordsSynced: number
+  phase: 'starting' | 'syncing' | 'finishing' | 'done' | 'error'
+  currentResourceKey: string | null
+  currentResourceLabel: string | null
+  resources: Record<string, ResourceProgress>
+  totalSynced: number
   totalExpected: number
-  peopleSynced: number
-  groupsSynced: number
-  teamsSynced: number
-  peopleTotalExpected: number
-  groupsTotalExpected: number
-  teamsTotalExpected: number
   error?: string
 }
 
-const RESOURCE_ORDER: Array<'people' | 'groups' | 'teams'> = ['people', 'groups', 'teams']
-const RESOURCE_LABELS: Record<string, string> = { people: 'People', groups: 'Groups', teams: 'Teams' }
+/* ── Component ─────────────────────────────────────────────────── */
 
 export default function PcoSyncPanel() {
   const [status, setStatus] = useState<SyncStatus | null>(null)
   const [loading, setLoading] = useState(true)
   const [syncing, setSyncing] = useState(false)
   const [progress, setProgress] = useState<SyncProgress | null>(null)
+  const [purging, setPurging] = useState(false)
+  const [purgeConfirm, setPurgeConfirm] = useState(false)
   const abortRef = useRef(false)
 
   const fetchStatus = useCallback(async () => {
@@ -51,17 +67,21 @@ export default function PcoSyncPanel() {
 
   useEffect(() => { fetchStatus() }, [fetchStatus])
 
+  /* ── Sync handler ──────────────────────────────────────────── */
   const handleSync = async () => {
     setSyncing(true)
     abortRef.current = false
     setProgress({
-      phase: 'starting', currentResource: '', recordsSynced: 0, totalExpected: 0,
-      peopleSynced: 0, groupsSynced: 0, teamsSynced: 0,
-      peopleTotalExpected: 0, groupsTotalExpected: 0, teamsTotalExpected: 0,
+      phase: 'starting',
+      currentResourceKey: null,
+      currentResourceLabel: null,
+      resources: {},
+      totalSynced: 0,
+      totalExpected: 0,
     })
 
     try {
-      // Step 1: Start sync — get totals and create log entry
+      // Step 1: Start sync — get per-resource counts + create log
       const startRes = await fetch('/api/pco', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -70,29 +90,42 @@ export default function PcoSyncPanel() {
       const startData = await startRes.json()
       if (!startRes.ok) throw new Error(startData.error || 'Failed to start sync')
 
-      const { syncLogId, totals, updatedSince, isIncremental } = startData
-      const totalExpected = (totals.people || 0) + (totals.groups || 0) + (totals.teams || 0)
+      const { syncLogId, resourceInfo } = startData
+      // resourceInfo: { [key]: { count, updatedSince } }
+
+      // Build initial progress state from resourceInfo
+      const initialResources: Record<string, ResourceProgress> = {}
+      let totalExpected = 0
+      for (const [key, info] of Object.entries(resourceInfo) as [string, any][]) {
+        initialResources[key] = { synced: 0, total: info.count }
+        totalExpected += info.count
+      }
 
       setProgress(p => p ? {
         ...p,
+        phase: 'syncing',
+        resources: initialResources,
         totalExpected,
-        peopleTotalExpected: totals.people || 0,
-        groupsTotalExpected: totals.groups || 0,
-        teamsTotalExpected: totals.teams || 0,
       } : p)
 
       let totalSynced = 0
 
-      // Step 2: Page through each resource
-      for (const resource of RESOURCE_ORDER) {
+      // Step 2: Page through each resource in order
+      const resourceKeys = Object.keys(resourceInfo)
+      for (const resourceKey of resourceKeys) {
         if (abortRef.current) break
 
-        setProgress(p => p ? { ...p, phase: resource, currentResource: RESOURCE_LABELS[resource] } : p)
+        const info = resourceInfo[resourceKey]
+        const resourceLabel = status?.resources.find(r => r.key === resourceKey)?.label || resourceKey
+
+        setProgress(p => p ? {
+          ...p,
+          currentResourceKey: resourceKey,
+          currentResourceLabel: resourceLabel,
+        } : p)
 
         let offset = 0
         let resourceSynced = 0
-        // Pass updatedSince for this resource so the API filters by it
-        const resourceUpdatedSince = updatedSince?.[resource] || null
 
         while (true) {
           if (abortRef.current) break
@@ -100,16 +133,22 @@ export default function PcoSyncPanel() {
           const pageRes = await fetch('/api/pco', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ action: 'sync_page', resource, offset, syncLogId, updatedSince: resourceUpdatedSince }),
+            body: JSON.stringify({
+              action: 'sync_page',
+              resourceKey,
+              offset,
+              syncLogId,
+              updatedSince: info.updatedSince || null,
+            }),
           })
           const pageData = await pageRes.json()
 
           if (!pageRes.ok) {
-            // Non-fatal for groups/teams — PCO might not have that module
-            if (resource !== 'people') {
+            // Non-fatal for optional resources — PCO might not have that module
+            if (resourceKey !== 'people') {
               break
             }
-            throw new Error(pageData.error || `Failed syncing ${resource}`)
+            throw new Error(pageData.error || `Failed syncing ${resourceKey}`)
           }
 
           resourceSynced += pageData.upserted || 0
@@ -117,22 +156,23 @@ export default function PcoSyncPanel() {
 
           setProgress(p => {
             if (!p) return p
+            const updated = { ...p.resources }
+            updated[resourceKey] = { ...updated[resourceKey], synced: resourceSynced }
             return {
               ...p,
-              recordsSynced: totalSynced,
-              [`${resource}Synced`]: resourceSynced,
-            } as SyncProgress
+              resources: updated,
+              totalSynced,
+            }
           })
 
-          if (!pageData.hasMore || !pageData.nextOffset) break
+          if (!pageData.hasMore || pageData.nextOffset == null) break
           offset = pageData.nextOffset
         }
       }
 
       // Step 3: Finish sync
-      setProgress(p => p ? { ...p, phase: 'finishing' } : p)
+      setProgress(p => p ? { ...p, phase: 'finishing', currentResourceKey: null, currentResourceLabel: null } : p)
 
-      const wasCancelled = abortRef.current
       await fetch('/api/pco', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -140,22 +180,17 @@ export default function PcoSyncPanel() {
           action: 'sync_finish',
           syncLogId,
           totalRecords: totalSynced,
-          status: wasCancelled ? 'success' : 'success',  // still success — data was saved
+          status: 'success',
           error: null,
         }),
       })
 
-      setProgress(p => p ? {
-        ...p,
-        phase: 'done',
-        // Show a note if cancelled early
-        ...(wasCancelled && totalSynced > 0 ? {} : {}),
-      } : p)
-      fetchStatus()  // Refresh DB counts to show what was saved
+      setProgress(p => p ? { ...p, phase: 'done' } : p)
+      fetchStatus()
 
     } catch (e: any) {
       setProgress(p => p ? { ...p, phase: 'error', error: e.message } : p)
-      fetchStatus()  // Still refresh — partial data may have been saved
+      fetchStatus()
     }
 
     setSyncing(false)
@@ -163,6 +198,29 @@ export default function PcoSyncPanel() {
 
   const handleCancel = () => { abortRef.current = true }
 
+  /* ── Purge handler ─────────────────────────────────────────── */
+  const handlePurge = async () => {
+    setPurging(true)
+    try {
+      const res = await fetch('/api/pco', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'purge' }),
+      })
+      if (!res.ok) {
+        const data = await res.json()
+        throw new Error(data.error || 'Purge failed')
+      }
+      setPurgeConfirm(false)
+      setProgress(null)
+      fetchStatus()
+    } catch (e: any) {
+      alert(`Failed to purge: ${e.message}`)
+    }
+    setPurging(false)
+  }
+
+  /* ── Loading state ─────────────────────────────────────────── */
   if (loading) {
     return (
       <div className="rounded-xl border p-6" style={{ background: 'var(--card)', borderColor: 'var(--border)', boxShadow: 'var(--card-shadow)' }}>
@@ -186,13 +244,25 @@ export default function PcoSyncPanel() {
     )
   }
 
+  /* ── Helpers ────────────────────────────────────────────────── */
+  const categories = status.categories || []
+  const resources = status.resources || []
+  const totalRecords = Object.values(status.counts).reduce((a, b) => a + b, 0)
+
+  // Group resources by category for display
+  const resourcesByCategory: Record<string, ResourceMeta[]> = {}
+  for (const cat of categories) {
+    resourcesByCategory[cat.key] = resources.filter(r => r.category === cat.key)
+  }
+
+  /* ── Render ────────────────────────────────────────────────── */
   return (
     <div className="rounded-xl border p-6" style={{ background: 'var(--card)', borderColor: 'var(--border)', boxShadow: 'var(--card-shadow)' }}>
       <div className="flex items-start justify-between mb-5">
         <div>
           <h2 className="font-serif text-lg" style={{ color: 'var(--foreground)' }}>Data Sync</h2>
           <p className="text-sm sans mt-0.5" style={{ color: 'var(--foreground-muted)' }}>
-            Import people, groups, and teams from Planning Center.
+            Import people, groups, services, and check-ins from Planning Center.
           </p>
         </div>
         {!syncing ? (
@@ -209,7 +279,7 @@ export default function PcoSyncPanel() {
         )}
       </div>
 
-      {/* Live progress */}
+      {/* ── Live progress ──────────────────────────────────────── */}
       {progress && progress.phase !== 'done' && progress.phase !== 'error' && (
         <div className="rounded-lg p-4 mb-5" style={{ background: 'var(--primary-light)' }}>
           <div className="flex items-center gap-2 mb-3">
@@ -218,49 +288,70 @@ export default function PcoSyncPanel() {
             <span className="text-sm sans font-medium" style={{ color: 'var(--green-800)' }}>
               {progress.phase === 'starting' && 'Preparing sync\u2026'}
               {progress.phase === 'finishing' && 'Finishing up\u2026'}
-              {['people', 'groups', 'teams'].includes(progress.phase) &&
-                `Syncing ${progress.currentResource}\u2026`}
+              {progress.phase === 'syncing' && progress.currentResourceLabel &&
+                `Syncing ${progress.currentResourceLabel}\u2026`}
             </span>
           </div>
 
-          {/* Per-resource progress bars */}
-          {RESOURCE_ORDER.map(res => {
-            const synced = progress[`${res}Synced` as keyof SyncProgress] as number || 0
-            const total = progress[`${res}TotalExpected` as keyof SyncProgress] as number || 0
-            const pct = total > 0 ? Math.min(100, (synced / total) * 100) : 0
-            const isActive = progress.phase === res
+          {/* Per-category progress */}
+          {categories.map(cat => {
+            const catResources = resourcesByCategory[cat.key] || []
+            if (catResources.length === 0) return null
+
+            // Category-level totals
+            const catSynced = catResources.reduce((sum, r) => sum + (progress.resources[r.key]?.synced || 0), 0)
+            const catTotal = catResources.reduce((sum, r) => sum + (progress.resources[r.key]?.total || 0), 0)
+            const catPct = catTotal > 0 ? Math.min(100, (catSynced / catTotal) * 100) : 0
+            const isActive = catResources.some(r => r.key === progress.currentResourceKey)
 
             return (
-              <div key={res} className="mb-2 last:mb-0">
+              <div key={cat.key} className="mb-3 last:mb-0">
                 <div className="flex justify-between text-xs sans mb-1" style={{ color: 'var(--green-800)' }}>
-                  <span style={{ fontWeight: isActive ? 600 : 400 }}>{RESOURCE_LABELS[res]}</span>
-                  <span>{synced.toLocaleString()}{total > 0 ? ` / ${total.toLocaleString()}` : ''}</span>
+                  <span style={{ fontWeight: isActive ? 600 : 400 }}>{cat.label}</span>
+                  <span>{catSynced.toLocaleString()}{catTotal > 0 ? ` / ${catTotal.toLocaleString()}` : ''}</span>
                 </div>
                 <div className="h-1.5 rounded-full overflow-hidden" style={{ background: 'var(--green-200)' }}>
                   <div className="h-full rounded-full transition-all duration-300"
-                    style={{ width: `${pct}%`, background: 'var(--green-600)' }} />
+                    style={{ width: `${catPct}%`, background: 'var(--green-600)' }} />
                 </div>
+
+                {/* Individual resources within category (collapsed, small text) */}
+                {catResources.length > 1 && (
+                  <div className="mt-1 ml-2 space-y-0.5">
+                    {catResources.map(r => {
+                      const rp = progress.resources[r.key]
+                      if (!rp || rp.total === 0) return null
+                      const isActiveRes = r.key === progress.currentResourceKey
+                      return (
+                        <div key={r.key} className="flex justify-between text-xs sans"
+                          style={{ color: 'var(--green-700)', opacity: isActiveRes ? 1 : 0.7, fontSize: '0.65rem' }}>
+                          <span>{r.label}</span>
+                          <span>{rp.synced.toLocaleString()} / {rp.total.toLocaleString()}</span>
+                        </div>
+                      )
+                    })}
+                  </div>
+                )}
               </div>
             )
           })}
 
           <div className="text-xs sans mt-3 text-right" style={{ color: 'var(--green-700)' }}>
-            {progress.recordsSynced.toLocaleString()} records synced
+            {progress.totalSynced.toLocaleString()} records synced
           </div>
         </div>
       )}
 
-      {/* Success message */}
+      {/* ── Success message ────────────────────────────────────── */}
       {progress?.phase === 'done' && (
         <div className="rounded-lg px-4 py-3 text-sm sans mb-5 flex items-center gap-2"
           style={{ background: '#f0fdf4', color: 'var(--green-800)' }}>
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><path d="M20 6L9 17l-5-5"/></svg>
-          Sync complete &mdash; {progress.recordsSynced.toLocaleString()} records
-          ({progress.peopleSynced.toLocaleString()} people, {progress.groupsSynced.toLocaleString()} groups, {progress.teamsSynced.toLocaleString()} teams)
+          Sync complete &mdash; {progress.totalSynced.toLocaleString()} records synced
         </div>
       )}
 
-      {/* Error message */}
+      {/* ── Error message ──────────────────────────────────────── */}
       {progress?.phase === 'error' && (
         <div className="rounded-lg px-4 py-3 text-sm sans mb-5 flex items-center gap-2"
           style={{ background: 'var(--danger-light)', color: '#991b1b' }}>
@@ -271,16 +362,40 @@ export default function PcoSyncPanel() {
         </div>
       )}
 
-      {/* Record counts */}
-      <div className="grid grid-cols-3 gap-4 mb-5">
-        <CountCard label="People" count={status.counts.people} />
-        <CountCard label="Groups" count={status.counts.groups} />
-        <CountCard label="Teams" count={status.counts.teams} />
+      {/* ── Record counts by category ──────────────────────────── */}
+      <div className="space-y-3 mb-5">
+        {categories.map(cat => {
+          const catResources = resourcesByCategory[cat.key] || []
+          const catTotal = catResources.reduce((sum, r) => sum + (status.counts[r.key] || 0), 0)
+
+          return (
+            <div key={cat.key} className="rounded-lg p-3" style={{ background: 'var(--background-subtle)' }}>
+              <div className="flex items-center justify-between mb-1">
+                <span className="text-sm sans font-medium" style={{ color: 'var(--foreground)' }}>{cat.label}</span>
+                <span className="text-lg font-serif" style={{ color: 'var(--primary)' }}>{catTotal.toLocaleString()}</span>
+              </div>
+              {catResources.length > 1 && (
+                <div className="flex flex-wrap gap-x-4 gap-y-0.5">
+                  {catResources.map(r => (
+                    <span key={r.key} className="text-xs sans" style={{ color: 'var(--foreground-muted)' }}>
+                      {r.label}: {(status.counts[r.key] || 0).toLocaleString()}
+                    </span>
+                  ))}
+                </div>
+              )}
+            </div>
+          )
+        })}
+        <div className="text-right">
+          <span className="text-xs sans" style={{ color: 'var(--foreground-muted)' }}>
+            Total: {totalRecords.toLocaleString()} records
+          </span>
+        </div>
       </div>
 
-      {/* Last sync info */}
+      {/* ── Last sync info ─────────────────────────────────────── */}
       {status.lastSync ? (
-        <div className="rounded-lg p-4" style={{ background: 'var(--background-subtle)' }}>
+        <div className="rounded-lg p-4 mb-4" style={{ background: 'var(--background-subtle)' }}>
           <div className="flex items-center gap-2 mb-1">
             <div className="w-2 h-2 rounded-full"
               style={{ background: status.lastSync.status === 'success' ? 'var(--success)' : status.lastSync.status === 'running' ? 'var(--gold-500)' : 'var(--danger)' }} />
@@ -303,26 +418,49 @@ export default function PcoSyncPanel() {
           )}
         </div>
       ) : !progress && (
-        <div className="rounded-lg p-4 text-center" style={{ background: 'var(--background-subtle)' }}>
+        <div className="rounded-lg p-4 text-center mb-4" style={{ background: 'var(--background-subtle)' }}>
           <p className="text-sm sans" style={{ color: 'var(--foreground-muted)' }}>
             No syncs yet. Hit &ldquo;Sync Now&rdquo; to import your PCO data.
           </p>
         </div>
       )}
+
+      {/* ── Delete all PCO data ────────────────────────────────── */}
+      <div className="border-t pt-4" style={{ borderColor: 'var(--border)' }}>
+        {!purgeConfirm ? (
+          <button
+            onClick={() => setPurgeConfirm(true)}
+            disabled={syncing}
+            className="text-xs sans font-medium px-3 py-1.5 rounded-lg border transition-colors"
+            style={{ borderColor: 'var(--neutral-300)', color: 'var(--foreground-muted)' }}>
+            Delete All PCO Data
+          </button>
+        ) : (
+          <div className="flex items-center gap-3">
+            <span className="text-xs sans" style={{ color: 'var(--danger)' }}>
+              This will permanently delete all synced PCO data. Are you sure?
+            </span>
+            <button
+              onClick={handlePurge}
+              disabled={purging}
+              className="text-xs sans font-bold px-3 py-1.5 rounded-lg"
+              style={{ background: 'var(--danger)', color: 'white' }}>
+              {purging ? 'Deleting\u2026' : 'Yes, Delete'}
+            </button>
+            <button
+              onClick={() => setPurgeConfirm(false)}
+              className="text-xs sans px-3 py-1.5 rounded-lg border"
+              style={{ borderColor: 'var(--neutral-300)', color: 'var(--foreground-muted)' }}>
+              Cancel
+            </button>
+          </div>
+        )}
+      </div>
     </div>
   )
 }
 
-function CountCard({ label, count }: { label: string; count: number }) {
-  return (
-    <div className="rounded-lg p-3 text-center" style={{ background: 'var(--background-subtle)' }}>
-      <div className="text-2xl font-serif" style={{ color: 'var(--primary)' }}>
-        {count.toLocaleString()}
-      </div>
-      <div className="text-xs sans mt-0.5" style={{ color: 'var(--foreground-muted)' }}>{label}</div>
-    </div>
-  )
-}
+/* ── Utility components ──────────────────────────────────────── */
 
 function SyncIcon() {
   return (
