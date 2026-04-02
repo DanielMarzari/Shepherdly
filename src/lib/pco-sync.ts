@@ -102,6 +102,23 @@ export const SYNC_RESOURCES: SyncResource[] = [
     }),
   },
 
+  {
+    key: 'group_memberships',
+    label: 'Group Memberships',
+    category: 'groups',
+    table: 'pco_group_memberships',
+    endpoint: '/groups/v2/memberships',
+    supportsUpdatedSince: false, // no updated_at on memberships
+    mapRow: (m) => ({
+      pco_id: m.id,
+      group_pco_id: m.relationships?.group?.data?.id || null,
+      person_pco_id: m.relationships?.person?.data?.id || null,
+      role: m.attributes.role || 'member',
+      joined_at: m.attributes.joined_at || null,
+      last_synced_at: new Date().toISOString(),
+    }),
+  },
+
   // ── Services ───────────────────────────────────────────────
   {
     key: 'service_types',
@@ -130,6 +147,7 @@ export const SYNC_RESOURCES: SyncResource[] = [
       pco_id: t.id,
       name: t.attributes.name || 'Unnamed Team',
       description: t.attributes.default_status || null,
+      service_type_pco_id: t.relationships?.service_type?.data?.id || null,
       archived_at: t.attributes.archived_at || null,
       pco_updated_at: t.attributes.updated_at || null,
       last_synced_at: new Date().toISOString(),
