@@ -31,8 +31,8 @@ export default function PcoSettingsForm({ settings }: { settings: any }) {
   }
 
   return (
-    <form onSubmit={handleSave} className="bg-white rounded-2xl border p-6 space-y-5"
-      style={{ borderColor: 'var(--border)' }}>
+    <form onSubmit={handleSave} className="rounded-xl border p-6 space-y-5"
+      style={{ background: 'var(--card)', borderColor: 'var(--border)', boxShadow: 'var(--card-shadow)' }}>
 
       <div>
         <label className="block text-sm font-medium sans mb-1.5" style={{ color: 'var(--foreground)' }}>
@@ -43,8 +43,8 @@ export default function PcoSettingsForm({ settings }: { settings: any }) {
           value={appId}
           onChange={e => setAppId(e.target.value)}
           placeholder="Your PCO App ID"
-          className="w-full px-4 py-2.5 rounded-lg border text-sm sans outline-none"
-          style={{ borderColor: 'var(--border)', background: 'var(--muted)' }}
+          className="w-full px-4 py-2.5 rounded-lg border text-sm sans outline-none transition-colors"
+          style={{ borderColor: 'var(--border)', background: 'var(--background-subtle)', color: 'var(--foreground)' }}
         />
       </div>
 
@@ -56,12 +56,12 @@ export default function PcoSettingsForm({ settings }: { settings: any }) {
           type="password"
           value={appSecret}
           onChange={e => setAppSecret(e.target.value)}
-          placeholder={settings?.pco_app_secret ? '••••••••••••••••' : 'Enter your PCO App Secret'}
-          className="w-full px-4 py-2.5 rounded-lg border text-sm sans outline-none"
-          style={{ borderColor: 'var(--border)', background: 'var(--muted)' }}
+          placeholder={settings?.pco_app_secret ? '\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022' : 'Enter your PCO App Secret'}
+          className="w-full px-4 py-2.5 rounded-lg border text-sm sans outline-none transition-colors"
+          style={{ borderColor: 'var(--border)', background: 'var(--background-subtle)', color: 'var(--foreground)' }}
         />
         {settings?.pco_app_secret && (
-          <p className="text-xs sans mt-1" style={{ color: 'var(--muted-foreground)' }}>
+          <p className="text-xs sans mt-1.5" style={{ color: 'var(--foreground-muted)' }}>
             A secret is already saved. Leave blank to keep it unchanged.
           </p>
         )}
@@ -71,16 +71,15 @@ export default function PcoSettingsForm({ settings }: { settings: any }) {
         <button
           type="submit"
           disabled={saving}
-          className="px-5 py-2.5 rounded-lg text-sm font-medium sans disabled:opacity-50"
-          style={{ background: 'var(--primary)', color: 'white' }}>
-          {saving ? 'Saving...' : 'Save Credentials'}
+          className="btn-primary text-sm sans disabled:opacity-50">
+          {saving ? 'Saving\u2026' : 'Save Credentials'}
         </button>
-        {saved && <span className="text-sm sans" style={{ color: 'var(--success)' }}>✓ Saved!</span>}
+        {saved && <span className="text-sm sans font-medium" style={{ color: 'var(--success)' }}>Saved!</span>}
         {error && <span className="text-sm sans" style={{ color: 'var(--danger)' }}>{error}</span>}
       </div>
 
       {settings?.pco_last_sync && (
-        <div className="pt-2 border-t text-xs sans" style={{ borderColor: 'var(--border)', color: 'var(--muted-foreground)' }}>
+        <div className="pt-3 border-t text-xs sans" style={{ borderColor: 'var(--border)', color: 'var(--foreground-muted)' }}>
           Last synced: {new Date(settings.pco_last_sync).toLocaleString()}
         </div>
       )}

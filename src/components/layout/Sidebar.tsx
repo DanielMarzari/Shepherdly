@@ -49,7 +49,7 @@ export default function Sidebar({ user }: { user: AppUser }) {
 
   return (
     <aside className="w-64 flex flex-col border-r shrink-0"
-      style={{ background: 'var(--primary)', borderColor: 'rgba(255,255,255,0.1)' }}>
+      style={{ background: 'var(--sidebar-bg)', borderColor: 'rgba(255,255,255,0.1)' }}>
 
       {/* Logo */}
       <div className="px-6 py-5 border-b" style={{ borderColor: 'rgba(255,255,255,0.1)' }}>

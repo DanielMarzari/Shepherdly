@@ -10,10 +10,10 @@ export const ROLE_LABELS: Record<UserRole, string> = {
 }
 
 export const ROLE_COLORS: Record<UserRole, string> = {
-  super_admin: '#6b4c2a',
-  staff: '#4a7c59',
-  coach: '#3a5f8a',
-  leader: '#7a4f9e',
+  super_admin: '#2d6047',
+  staff: '#3a5f8a',
+  coach: '#6b4c9e',
+  leader: '#c17f3e',
 }
 
 export const ROLE_ORDER: UserRole[] = ['super_admin', 'staff', 'coach', 'leader']

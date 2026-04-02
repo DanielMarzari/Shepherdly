@@ -36,33 +36,51 @@ export default function LoginPage() {
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center" style={{ background: 'var(--background)' }}>
-      {/* Subtle cross-hatch background */}
-      <div className="absolute inset-0 opacity-[0.03]"
+    <div className="min-h-screen flex items-center justify-center relative overflow-hidden"
+      style={{ background: 'linear-gradient(135deg, #1a3a2a 0%, #234d38 40%, #2d6047 100%)' }}>
+
+      {/* Leaf pattern background */}
+      <div className="absolute inset-0 opacity-[0.06]"
         style={{
-          backgroundImage: `url("data:image/svg+xml,%3Csvg width='60' height='60' viewBox='0 0 60 60' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='none' fill-rule='evenodd'%3E%3Cg fill='%236b4c2a' fill-opacity='1'%3E%3Cpath d='M36 34v-4h-2v4h-4v2h4v4h2v-4h4v-2h-4zm0-30V0h-2v4h-4v2h4v4h2V6h4V4h-4zM6 34v-4H4v4H0v2h4v4h2v-4h4v-2H6zM6 4V0H4v4H0v2h4v4h2V6h4V4H6z'/%3E%3C/g%3E%3C/g%3E%3C/svg%3E")`
+          backgroundImage: `url("data:image/svg+xml,%3Csvg width='80' height='80' viewBox='0 0 80 80' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='%23ffffff' fill-opacity='1'%3E%3Cpath d='M40 10 C40 10 55 25 55 40 C55 55 40 55 40 55 C40 55 25 55 25 40 C25 25 40 10 40 10Z'/%3E%3Cpath d='M40 10 L40 55' stroke='%23ffffff' stroke-width='0.5' fill='none'/%3E%3Cpath d='M32 25 L40 32' stroke='%23ffffff' stroke-width='0.3' fill='none'/%3E%3Cpath d='M48 25 L40 32' stroke='%23ffffff' stroke-width='0.3' fill='none'/%3E%3Cpath d='M30 35 L40 40' stroke='%23ffffff' stroke-width='0.3' fill='none'/%3E%3Cpath d='M50 35 L40 40' stroke='%23ffffff' stroke-width='0.3' fill='none'/%3E%3C/g%3E%3C/svg%3E")`
         }} />
+
+      {/* Subtle radial glow */}
+      <div className="absolute inset-0"
+        style={{ background: 'radial-gradient(ellipse at center, rgba(106,184,142,0.15) 0%, transparent 70%)' }} />
 
       <div className="relative w-full max-w-sm px-6">
         {/* Logo */}
         <div className="text-center mb-10">
-          <div className="inline-flex items-center justify-center w-16 h-16 rounded-full mb-4"
-            style={{ background: 'var(--primary)' }}>
+          <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl mb-4"
+            style={{ background: 'rgba(255,255,255,0.15)', backdropFilter: 'blur(8px)' }}>
+            {/* Leaf icon */}
             <svg width="32" height="32" viewBox="0 0 32 32" fill="none">
-              <path d="M20 4C20 4 24 6 24 10C24 14 20 14 20 18V28" stroke="white" strokeWidth="2.5" strokeLinecap="round"/>
-              <path d="M12 28L20 28" stroke="white" strokeWidth="2.5" strokeLinecap="round"/>
-              <circle cx="12" cy="12" r="4" stroke="white" strokeWidth="2"/>
-              <path d="M12 16V28" stroke="white" strokeWidth="2" strokeLinecap="round"/>
+              <path d="M16 4C16 4 26 10 26 20C26 26 20 28 16 28C12 28 6 26 6 20C6 10 16 4 16 4Z"
+                fill="rgba(106,184,142,0.4)" stroke="white" strokeWidth="1.5"/>
+              <path d="M16 8V26" stroke="white" strokeWidth="1.5" strokeLinecap="round"/>
+              <path d="M11 14L16 18" stroke="white" strokeWidth="1" strokeLinecap="round" opacity="0.7"/>
+              <path d="M21 14L16 18" stroke="white" strokeWidth="1" strokeLinecap="round" opacity="0.7"/>
+              <path d="M10 20L16 23" stroke="white" strokeWidth="1" strokeLinecap="round" opacity="0.7"/>
+              <path d="M22 20L16 23" stroke="white" strokeWidth="1" strokeLinecap="round" opacity="0.7"/>
             </svg>
           </div>
-          <h1 className="text-3xl font-serif" style={{ color: 'var(--primary)' }}>Shepherdly</h1>
-          <p className="mt-1 text-sm sans" style={{ color: 'var(--muted-foreground)' }}>Faith Church · Pastoral Care</p>
+          <h1 className="text-3xl font-serif text-white">Shepherdly</h1>
+          <p className="mt-1.5 text-sm sans" style={{ color: 'rgba(255,255,255,0.55)' }}>
+            Faith Church &middot; Pastoral Care
+          </p>
         </div>
 
         {/* Card */}
-        <div className="bg-white rounded-2xl shadow-lg border p-8" style={{ borderColor: 'var(--border)' }}>
-          <h2 className="text-xl font-serif mb-1" style={{ color: 'var(--foreground)' }}>Enter your access code</h2>
-          <p className="text-sm sans mb-6" style={{ color: 'var(--muted-foreground)' }}>
+        <div className="rounded-2xl p-8"
+          style={{
+            background: 'rgba(255,255,255,0.1)',
+            backdropFilter: 'blur(16px)',
+            border: '1px solid rgba(255,255,255,0.15)',
+            boxShadow: '0 8px 32px rgba(0,0,0,0.2)',
+          }}>
+          <h2 className="text-xl font-serif mb-1 text-white">Enter your access code</h2>
+          <p className="text-sm sans mb-6" style={{ color: 'rgba(255,255,255,0.55)' }}>
             Your code was given to you by a church administrator.
           </p>
 
@@ -77,18 +95,18 @@ export default function LoginPage() {
               autoComplete="off"
               autoCorrect="off"
               spellCheck={false}
-              className="w-full px-4 py-3 rounded-lg border text-center text-xl font-mono tracking-widest outline-none transition-all"
+              className="w-full px-4 py-3 rounded-lg text-center text-xl font-mono tracking-widest outline-none transition-all"
               style={{
-                borderColor: error ? 'var(--danger)' : 'var(--border)',
-                background: 'var(--muted)',
-                color: 'var(--foreground)',
+                background: 'rgba(255,255,255,0.1)',
+                border: `1px solid ${error ? '#ef4444' : 'rgba(255,255,255,0.2)'}`,
+                color: 'white',
                 letterSpacing: '0.2em',
               }}
             />
 
             {error && (
               <p className="text-sm sans rounded-lg px-3 py-2 text-center"
-                style={{ background: '#fef2f2', color: 'var(--danger)' }}>
+                style={{ background: 'rgba(220,74,74,0.15)', color: '#fca5a5' }}>
                 {error}
               </p>
             )}
@@ -96,15 +114,18 @@ export default function LoginPage() {
             <button
               type="submit"
               disabled={loading || code.trim().length < 4}
-              className="w-full py-3 px-4 rounded-lg text-sm font-medium sans transition-opacity disabled:opacity-40"
-              style={{ background: 'var(--primary)', color: 'white' }}>
-              {loading ? 'Signing in…' : 'Sign In'}
+              className="w-full py-3 px-4 rounded-lg text-sm font-semibold sans transition-all disabled:opacity-40"
+              style={{
+                background: 'rgba(255,255,255,0.95)',
+                color: 'var(--green-800, #234d38)',
+              }}>
+              {loading ? 'Signing in\u2026' : 'Sign In'}
             </button>
           </form>
         </div>
 
-        <p className="text-center text-xs mt-6 sans" style={{ color: 'var(--muted-foreground)' }}>
-          Don't have a code? Contact your church administrator.
+        <p className="text-center text-xs mt-6 sans" style={{ color: 'rgba(255,255,255,0.4)' }}>
+          Don&apos;t have a code? Contact your church administrator.
         </p>
       </div>
     </div>

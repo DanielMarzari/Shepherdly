@@ -1,30 +1,62 @@
 @import "tailwindcss";
 
 :root {
-  /* Shepherdly warm pastoral palette */
-  --shepherd-cream: #fdf6ec;
-  --shepherd-warm: #f5e6d0;
-  --shepherd-tan: #e8c99a;
-  --shepherd-brown: #8b5e3c;
-  --shepherd-dark: #4a2c1a;
-  --shepherd-green: #4a7c59;
-  --shepherd-green-light: #7ab68a;
-  --shepherd-gold: #c9943a;
-  --shepherd-gold-light: #e8b96a;
-  --shepherd-muted: #9b8070;
-  --shepherd-border: #ddd0c0;
-  
-  --background: var(--shepherd-cream);
-  --foreground: var(--shepherd-dark);
+  /*
+   * Shepherdly palette — clean & modern, inspired by Faith Church's aesthetic.
+   * Primary green for trust/growth. Neutral whites & soft grays for breathing room.
+   */
+  --green-900: #1a3a2a;
+  --green-800: #234d38;
+  --green-700: #2d6047;
+  --green-600: #3a7d5c;
+  --green-500: #4a9e74;
+  --green-400: #6ab88e;
+  --green-300: #8fd4ae;
+  --green-200: #c3e8d5;
+  --green-100: #e6f5ed;
+  --green-50:  #f2faf6;
+
+  --neutral-900: #111827;
+  --neutral-800: #1f2937;
+  --neutral-700: #374151;
+  --neutral-600: #4b5563;
+  --neutral-500: #6b7280;
+  --neutral-400: #9ca3af;
+  --neutral-300: #d1d5db;
+  --neutral-200: #e5e7eb;
+  --neutral-100: #f3f4f6;
+  --neutral-50:  #f9fafb;
+
+  --gold-500: #c9943a;
+  --gold-400: #daa84e;
+
+  --red-500: #dc4a4a;
+  --red-100: #fef2f2;
+
+  /* Semantic tokens */
+  --background: #ffffff;
+  --background-subtle: var(--neutral-50);
+  --foreground: var(--neutral-900);
+  --foreground-muted: var(--neutral-500);
+  --primary: var(--green-700);
+  --primary-hover: var(--green-800);
+  --primary-light: var(--green-100);
+  --accent: var(--gold-500);
+  --success: var(--green-600);
+  --danger: var(--red-500);
+  --danger-light: var(--red-100);
+  --border: var(--neutral-200);
+  --border-light: var(--neutral-100);
   --card: #ffffff;
-  --card-border: var(--shepherd-border);
-  --primary: var(--shepherd-green);
-  --primary-light: var(--shepherd-green-light);
-  --accent: var(--shepherd-gold);
-  --muted: var(--shepherd-muted);
-  --sidebar-bg: var(--shepherd-dark);
-  --sidebar-text: #f5e6d0;
-  --sidebar-active: var(--shepherd-brown);
+  --card-shadow: 0 1px 3px rgba(0, 0, 0, 0.06), 0 1px 2px rgba(0, 0, 0, 0.04);
+  --card-shadow-lg: 0 4px 12px rgba(0, 0, 0, 0.08), 0 2px 4px rgba(0, 0, 0, 0.04);
+  --sidebar-bg: var(--green-900);
+
+  /* Role colors */
+  --role-super-admin: var(--green-700);
+  --role-staff: #3a5f8a;
+  --role-coach: #6b4c9e;
+  --role-leader: #c17f3e;
 }
 
 * { box-sizing: border-box; }
@@ -32,26 +64,32 @@
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: 'Georgia', 'Times New Roman', serif;
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   font-size: 15px;
   line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
 }
 
-/* Sans-serif for UI elements */
+/* Serif for headings / display */
+h1, h2, h3, .font-serif {
+  font-family: 'Georgia', 'Times New Roman', serif;
+}
+
+/* Sans-serif for UI */
 button, input, select, textarea, .sans {
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
 }
 
 .card {
   background: var(--card);
-  border: 1px solid var(--card-border);
+  border: 1px solid var(--border);
   border-radius: 12px;
   padding: 1.5rem;
-  box-shadow: 0 1px 4px rgba(74, 44, 26, 0.06);
+  box-shadow: var(--card-shadow);
 }
 
 .btn-primary {
-  background: var(--shepherd-green);
+  background: var(--primary);
   color: white;
   border: none;
   border-radius: 8px;
@@ -59,19 +97,17 @@ button, input, select, textarea, .sans {
   font-weight: 600;
   cursor: pointer;
   transition: background 0.15s;
-  font-family: -apple-system, sans-serif;
 }
-.btn-primary:hover { background: #3d6b4a; }
+.btn-primary:hover { background: var(--primary-hover); }
 
 .btn-secondary {
   background: transparent;
-  color: var(--shepherd-brown);
-  border: 1.5px solid var(--shepherd-tan);
+  color: var(--foreground);
+  border: 1.5px solid var(--border);
   border-radius: 8px;
   padding: 0.6rem 1.2rem;
   font-weight: 600;
   cursor: pointer;
   transition: all 0.15s;
-  font-family: -apple-system, sans-serif;
 }
-.btn-secondary:hover { background: var(--shepherd-warm); }
+.btn-secondary:hover { background: var(--background-subtle); }
