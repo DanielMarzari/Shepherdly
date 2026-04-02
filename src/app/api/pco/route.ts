@@ -2,7 +2,12 @@ import { createClient } from '@/lib/supabase/server'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { encrypt, decrypt } from '@/lib/crypto'
 import { PcoClient, createPcoClient } from '@/lib/pco'
-import { SYNC_RESOURCES, SYNC_CATEGORIES, getResourceCount, fetchResourcePage, PCO_TABLES } from '@/lib/pco-sync'
+import {
+  SYNC_RESOURCES, SYNC_CATEGORIES, PCO_TABLES,
+  getResourceCount, fetchResourcePage,
+  getNestedResourceInfo, fetchNestedPage,
+  type NestedCursor,
+} from '@/lib/pco-sync'
 import { NextRequest, NextResponse } from 'next/server'
 
 /** Helper: require super_admin, return admin client + settings */
@@ -42,11 +47,15 @@ export async function GET(request: NextRequest) {
         .from('sync_logs').select('*')
         .order('started_at', { ascending: false }).limit(1).single()
 
-      // Count all resource tables
+      // Count all resource tables (skip tables that don't exist)
       const counts: Record<string, number> = {}
       for (const res of SYNC_RESOURCES) {
-        const { count } = await admin.from(res.table).select('*', { count: 'exact', head: true })
-        counts[res.key] = count || 0
+        try {
+          const { count } = await admin.from(res.table).select('*', { count: 'exact', head: true })
+          counts[res.key] = count || 0
+        } catch {
+          counts[res.key] = 0
+        }
       }
 
       return NextResponse.json({
@@ -124,15 +133,69 @@ export async function POST(request: NextRequest) {
 
       const client = createPcoClient(settings.pco_app_id, settings.pco_app_secret)
 
-      // Get updatedSince per resource and counts
-      const resourceInfo: Record<string, { count: number; updatedSince: string | null }> = {}
+      const resourceInfo: Record<string, {
+        pcoCount: number
+        dbCount: number
+        toSync: number
+        updatedSince: string | null
+        isNested: boolean
+        cursor?: NestedCursor
+      }> = {}
 
       for (const res of SYNC_RESOURCES) {
-        const updatedSince = res.supportsUpdatedSince
-          ? await getLastPcoUpdated(admin, res.table)
-          : null
-        const count = await getResourceCount(client, res, updatedSince)
-        resourceInfo[res.key] = { count, updatedSince }
+        // Get DB count
+        let dbCount = 0
+        try {
+          const { count } = await admin.from(res.table).select('*', { count: 'exact', head: true })
+          dbCount = count || 0
+        } catch { /* table might not exist */ }
+
+        if (res.nested) {
+          // Nested resource — get parent list and estimated count
+          try {
+            const { totalCount, cursor } = await getNestedResourceInfo(client, res, admin)
+            resourceInfo[res.key] = {
+              pcoCount: totalCount,
+              dbCount,
+              toSync: totalCount, // always sync all for nested (cursor handles incremental)
+              updatedSince: null,
+              isNested: true,
+              cursor,
+            }
+          } catch {
+            // Table/endpoint might not exist — skip gracefully
+            resourceInfo[res.key] = {
+              pcoCount: 0, dbCount: 0, toSync: 0,
+              updatedSince: null, isNested: true,
+            }
+          }
+        } else {
+          // Flat resource
+          const pcoCount = await getResourceCount(client, res)
+
+          let toSync: number
+          let updatedSince: string | null = null
+
+          if (res.supportsUpdatedSince) {
+            // Incremental: only fetch records modified since last sync
+            updatedSince = await getLastPcoUpdated(admin, res.table)
+            toSync = updatedSince
+              ? await getResourceCount(client, res, updatedSince)
+              : pcoCount
+          } else {
+            // No updatedSince filter — compare counts
+            // Skip if PCO count matches DB count (nothing new)
+            toSync = pcoCount === dbCount ? 0 : pcoCount
+          }
+
+          resourceInfo[res.key] = {
+            pcoCount,
+            dbCount,
+            toSync,
+            updatedSince,
+            isNested: false,
+          }
+        }
       }
 
       const { data: syncLog } = await admin
@@ -151,7 +214,7 @@ export async function POST(request: NextRequest) {
 
     // ── Sync one page ──────────────────────────────────────────
     if (body.action === 'sync_page') {
-      const { resourceKey, offset = 0, syncLogId, updatedSince } = body
+      const { resourceKey, offset = 0, syncLogId, updatedSince, cursor } = body
       const resource = SYNC_RESOURCES.find(r => r.key === resourceKey)
       if (!resource) return NextResponse.json({ error: 'Invalid resource' }, { status: 400 })
       if (!settings?.pco_app_id || !settings?.pco_app_secret) {
@@ -160,33 +223,76 @@ export async function POST(request: NextRequest) {
 
       const client = createPcoClient(settings.pco_app_id, settings.pco_app_secret)
 
+      // ── Nested resources (cursor-based) ──────────────────────
+      if (resource.nested && cursor) {
+        const { rows, hasMore, nextCursor, upsertedEstimate } = await fetchNestedPage(
+          client, resource, cursor as NestedCursor, 100,
+        )
+
+        let upserted = 0
+        if (rows.length > 0) {
+          const { error: upsertErr } = await admin
+            .from(resource.table)
+            .upsert(rows, { onConflict: 'pco_id' })
+
+          if (upsertErr) {
+            // Table might not exist — non-fatal
+            return NextResponse.json({
+              error: `${resource.label}: ${upsertErr.message}`,
+              upserted: 0,
+              hasMore: false,
+              nextCursor: null,
+            }, { status: 500 })
+          }
+          upserted = rows.length
+        }
+
+        if (syncLogId && upserted > 0) {
+          await incrementSyncLog(admin, syncLogId, upserted)
+        }
+
+        return NextResponse.json({
+          upserted,
+          hasMore,
+          nextCursor,
+        })
+      }
+
+      // ── Replace strategy (memberships) ───────────────────────
+      if (resource.syncStrategy === 'replace' && offset === 0) {
+        // Delete all existing rows before inserting fresh data
+        await admin.from(resource.table).delete().neq('id', '00000000-0000-0000-0000-000000000000')
+      }
+
+      // ── Flat resources (offset-based) ────────────────────────
       const { rows, hasMore, totalCount } = await fetchResourcePage(
         client, resource, offset, 100, updatedSince,
       )
 
       let upserted = 0
       if (rows.length > 0) {
-        const { error: upsertErr } = await admin
-          .from(resource.table)
-          .upsert(rows, { onConflict: 'pco_id' })
-
-        if (upsertErr) {
-          return NextResponse.json({
-            error: `${resource.label} upsert failed: ${upsertErr.message}`,
-          }, { status: 500 })
+        if (resource.syncStrategy === 'replace') {
+          const { error: insertErr } = await admin.from(resource.table).insert(rows)
+          if (insertErr) {
+            return NextResponse.json({
+              error: `${resource.label} insert failed: ${insertErr.message}`,
+            }, { status: 500 })
+          }
+        } else {
+          const { error: upsertErr } = await admin
+            .from(resource.table)
+            .upsert(rows, { onConflict: 'pco_id' })
+          if (upsertErr) {
+            return NextResponse.json({
+              error: `${resource.label} upsert failed: ${upsertErr.message}`,
+            }, { status: 500 })
+          }
         }
         upserted = rows.length
       }
 
-      // Update sync log count
       if (syncLogId && upserted > 0) {
-        const { data: log } = await admin.from('sync_logs')
-          .select('records_synced').eq('id', syncLogId).single()
-        if (log) {
-          await admin.from('sync_logs')
-            .update({ records_synced: (log.records_synced || 0) + upserted })
-            .eq('id', syncLogId)
-        }
+        await incrementSyncLog(admin, syncLogId, upserted)
       }
 
       return NextResponse.json({
@@ -219,9 +325,10 @@ export async function POST(request: NextRequest) {
     // ── Purge all PCO data ─────────────────────────────────────
     if (body.action === 'purge') {
       for (const table of PCO_TABLES) {
-        await admin.from(table).delete().neq('id', '00000000-0000-0000-0000-000000000000')
+        try {
+          await admin.from(table).delete().neq('id', '00000000-0000-0000-0000-000000000000')
+        } catch { /* table might not exist */ }
       }
-      // Reset last sync timestamp
       await admin.from('church_settings').update({ pco_last_sync: null }).eq('id', settings!.id)
       return NextResponse.json({ success: true })
     }
@@ -238,6 +345,16 @@ async function getLastPcoUpdated(admin: any, table: string): Promise<string | nu
     .from(table).select('pco_updated_at')
     .order('pco_updated_at', { ascending: false }).limit(1).single()
   return data?.pco_updated_at || null
+}
+
+async function incrementSyncLog(admin: any, syncLogId: string, count: number) {
+  const { data: log } = await admin.from('sync_logs')
+    .select('records_synced').eq('id', syncLogId).single()
+  if (log) {
+    await admin.from('sync_logs')
+      .update({ records_synced: (log.records_synced || 0) + count })
+      .eq('id', syncLogId)
+  }
 }
 
 function tryDecrypt(value: string | null): string {

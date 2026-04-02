@@ -4,44 +4,42 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 
 /* ── Types ─────────────────────────────────────────────────────── */
 
-interface ResourceMeta {
-  key: string
-  label: string
-  category: string
-}
-
-interface CategoryMeta {
-  key: string
-  label: string
-}
+interface ResourceMeta { key: string; label: string; category: string }
+interface CategoryMeta { key: string; label: string }
 
 interface SyncStatus {
   hasCredentials: boolean
   lastSync: {
-    status: string
-    started_at: string
-    completed_at: string | null
-    records_synced: number
-    error_message: string | null
-    details: Record<string, any> | null
+    status: string; started_at: string; completed_at: string | null
+    records_synced: number; error_message: string | null
   } | null
   counts: Record<string, number>
   categories: CategoryMeta[]
   resources: ResourceMeta[]
 }
 
+interface ResourceInfo {
+  pcoCount: number    // total in PCO
+  dbCount: number     // already in our DB
+  toSync: number      // how many to fetch this run (0 = skip)
+  updatedSince: string | null
+  isNested: boolean
+  cursor?: any        // for nested resources
+}
+
 interface ResourceProgress {
-  synced: number
-  total: number
+  pcoCount: number
+  dbCount: number
+  syncedThisRun: number
+  toSync: number
+  skipped: boolean
 }
 
 interface SyncProgress {
   phase: 'starting' | 'syncing' | 'finishing' | 'done' | 'error'
-  currentResourceKey: string | null
   currentResourceLabel: string | null
   resources: Record<string, ResourceProgress>
   totalSynced: number
-  totalExpected: number
   error?: string
 }
 
@@ -57,8 +55,7 @@ export default function PcoSyncPanel() {
   const fetchStatus = useCallback(async () => {
     try {
       const res = await fetch('/api/pco?action=status')
-      const data = await res.json()
-      setStatus(data)
+      setStatus(await res.json())
     } catch { /* ignore */ }
     setLoading(false)
   }, [])
@@ -71,15 +68,13 @@ export default function PcoSyncPanel() {
     abortRef.current = false
     setProgress({
       phase: 'starting',
-      currentResourceKey: null,
       currentResourceLabel: null,
       resources: {},
       totalSynced: 0,
-      totalExpected: 0,
     })
 
     try {
-      // Step 1: Start sync — get per-resource counts + create log
+      // Step 1: Start sync
       const startRes = await fetch('/api/pco', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -88,115 +83,143 @@ export default function PcoSyncPanel() {
       const startData = await startRes.json()
       if (!startRes.ok) throw new Error(startData.error || 'Failed to start sync')
 
-      const { syncLogId, resourceInfo } = startData
-      // resourceInfo: { [key]: { count, updatedSince } }
+      const { syncLogId, resourceInfo } = startData as {
+        syncLogId: string
+        resourceInfo: Record<string, ResourceInfo>
+      }
 
-      // Build initial progress state from resourceInfo
+      // Build initial progress — skipped resources start at 100%
       const initialResources: Record<string, ResourceProgress> = {}
-      let totalExpected = 0
-      for (const [key, info] of Object.entries(resourceInfo) as [string, any][]) {
-        initialResources[key] = { synced: 0, total: info.count }
-        totalExpected += info.count
+      for (const [key, info] of Object.entries(resourceInfo)) {
+        initialResources[key] = {
+          pcoCount: info.pcoCount,
+          dbCount: info.dbCount,
+          syncedThisRun: 0,
+          toSync: info.toSync,
+          skipped: info.toSync === 0,
+        }
       }
 
       setProgress(p => p ? {
-        ...p,
-        phase: 'syncing',
-        resources: initialResources,
-        totalExpected,
+        ...p, phase: 'syncing', resources: initialResources,
       } : p)
 
       let totalSynced = 0
 
-      // Step 2: Page through each resource in order
+      // Step 2: Page through each resource
       const resourceKeys = Object.keys(resourceInfo)
       for (const resourceKey of resourceKeys) {
         if (abortRef.current) break
 
         const info = resourceInfo[resourceKey]
+        if (info.toSync === 0) continue // already up to date
+
         const resourceLabel = status?.resources.find(r => r.key === resourceKey)?.label || resourceKey
+        setProgress(p => p ? { ...p, currentResourceLabel: resourceLabel } : p)
 
-        setProgress(p => p ? {
-          ...p,
-          currentResourceKey: resourceKey,
-          currentResourceLabel: resourceLabel,
-        } : p)
-
-        let offset = 0
         let resourceSynced = 0
 
-        while (true) {
-          if (abortRef.current) break
+        if (info.isNested && info.cursor) {
+          // ── Cursor-based nested pagination ──────────────────
+          let cursor = info.cursor
+          while (cursor) {
+            if (abortRef.current) break
 
-          const pageRes = await fetch('/api/pco', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              action: 'sync_page',
-              resourceKey,
-              offset,
-              syncLogId,
-              updatedSince: info.updatedSince || null,
-            }),
-          })
-          const pageData = await pageRes.json()
+            const pageRes = await fetch('/api/pco', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                action: 'sync_page',
+                resourceKey,
+                cursor,
+                syncLogId,
+              }),
+            })
+            const pageData = await pageRes.json()
 
-          if (!pageRes.ok) {
-            // Non-fatal for optional resources — PCO might not have that module
-            if (resourceKey !== 'people') {
+            if (!pageRes.ok) {
+              // Non-fatal — table might not exist yet
+              console.warn(`Nested sync failed for ${resourceKey}:`, pageData.error)
               break
             }
-            throw new Error(pageData.error || `Failed syncing ${resourceKey}`)
+
+            resourceSynced += pageData.upserted || 0
+            totalSynced += pageData.upserted || 0
+
+            setProgress(p => {
+              if (!p) return p
+              const updated = { ...p.resources }
+              updated[resourceKey] = { ...updated[resourceKey], syncedThisRun: resourceSynced }
+              return { ...p, resources: updated, totalSynced }
+            })
+
+            if (!pageData.hasMore || !pageData.nextCursor) break
+            cursor = pageData.nextCursor
           }
+        } else {
+          // ── Offset-based flat pagination ────────────────────
+          let offset = 0
+          while (true) {
+            if (abortRef.current) break
 
-          resourceSynced += pageData.upserted || 0
-          totalSynced += pageData.upserted || 0
+            const pageRes = await fetch('/api/pco', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                action: 'sync_page',
+                resourceKey,
+                offset,
+                syncLogId,
+                updatedSince: info.updatedSince || null,
+              }),
+            })
+            const pageData = await pageRes.json()
 
-          setProgress(p => {
-            if (!p) return p
-            const updated = { ...p.resources }
-            updated[resourceKey] = { ...updated[resourceKey], synced: resourceSynced }
-            return {
-              ...p,
-              resources: updated,
-              totalSynced,
+            if (!pageRes.ok) {
+              if (resourceKey !== 'people') break // non-fatal
+              throw new Error(pageData.error || `Failed syncing ${resourceKey}`)
             }
-          })
 
-          if (!pageData.hasMore || pageData.nextOffset == null) break
-          offset = pageData.nextOffset
+            resourceSynced += pageData.upserted || 0
+            totalSynced += pageData.upserted || 0
+
+            setProgress(p => {
+              if (!p) return p
+              const updated = { ...p.resources }
+              updated[resourceKey] = { ...updated[resourceKey], syncedThisRun: resourceSynced }
+              return { ...p, resources: updated, totalSynced }
+            })
+
+            if (!pageData.hasMore || pageData.nextOffset == null) break
+            offset = pageData.nextOffset
+          }
         }
       }
 
       // Step 3: Finish sync
-      setProgress(p => p ? { ...p, phase: 'finishing', currentResourceKey: null, currentResourceLabel: null } : p)
+      setProgress(p => p ? { ...p, phase: 'finishing', currentResourceLabel: null } : p)
 
       await fetch('/api/pco', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          action: 'sync_finish',
-          syncLogId,
-          totalRecords: totalSynced,
-          status: 'success',
-          error: null,
+          action: 'sync_finish', syncLogId,
+          totalRecords: totalSynced, status: 'success', error: null,
         }),
       })
 
       setProgress(p => p ? { ...p, phase: 'done' } : p)
       fetchStatus()
-
     } catch (e: any) {
       setProgress(p => p ? { ...p, phase: 'error', error: e.message } : p)
       fetchStatus()
     }
-
     setSyncing(false)
   }
 
   const handleCancel = () => { abortRef.current = true }
 
-  /* ── Loading state ─────────────────────────────────────────── */
+  /* ── Loading / no-creds states ─────────────────────────────── */
   if (loading) {
     return (
       <div className="rounded-xl border p-6" style={{ background: 'var(--card)', borderColor: 'var(--border)', boxShadow: 'var(--card-shadow)' }}>
@@ -225,10 +248,32 @@ export default function PcoSyncPanel() {
   const resources = status.resources || []
   const totalRecords = Object.values(status.counts).reduce((a, b) => a + b, 0)
 
-  // Group resources by category for display
   const resourcesByCategory: Record<string, ResourceMeta[]> = {}
   for (const cat of categories) {
     resourcesByCategory[cat.key] = resources.filter(r => r.category === cat.key)
+  }
+
+  /**
+   * Compute displayed synced count for a category during active sync.
+   * Shows full system total: completed resources at full count + in-progress resources at partial.
+   */
+  function getCategorySynced(catResources: ResourceMeta[]): number {
+    if (!progress) return 0
+    return catResources.reduce((sum, r) => {
+      const rp = progress.resources[r.key]
+      if (!rp) return sum + (status?.counts[r.key] || 0) // not in this sync run
+      if (rp.skipped) return sum + rp.pcoCount // fully synced already
+      // For incremental: already-done = pcoCount - toSync, plus what we've synced this run
+      return sum + (rp.pcoCount - rp.toSync) + rp.syncedThisRun
+    }, 0)
+  }
+
+  function getCategoryTotal(catResources: ResourceMeta[]): number {
+    if (!progress) return 0
+    return catResources.reduce((sum, r) => {
+      const rp = progress.resources[r.key]
+      return sum + (rp?.pcoCount || status?.counts[r.key] || 0)
+    }, 0)
   }
 
   /* ── Render ────────────────────────────────────────────────── */
@@ -269,21 +314,19 @@ export default function PcoSyncPanel() {
             </span>
           </div>
 
-          {/* Per-category progress bars */}
           {categories.map(cat => {
             const catResources = resourcesByCategory[cat.key] || []
             if (catResources.length === 0) return null
 
-            const catSynced = catResources.reduce((sum, r) => sum + (progress.resources[r.key]?.synced || 0), 0)
-            const catTotal = catResources.reduce((sum, r) => sum + (progress.resources[r.key]?.total || 0), 0)
+            const catSynced = getCategorySynced(catResources)
+            const catTotal = getCategoryTotal(catResources)
             const catPct = catTotal > 0 ? Math.min(100, (catSynced / catTotal) * 100) : 0
-            const isActive = catResources.some(r => r.key === progress.currentResourceKey)
 
             return (
               <div key={cat.key} className="mb-3 last:mb-0">
                 <div className="flex justify-between text-xs sans mb-1" style={{ color: 'var(--green-800)' }}>
-                  <span style={{ fontWeight: isActive ? 600 : 400 }}>{cat.label}</span>
-                  <span>{catSynced.toLocaleString()}{catTotal > 0 ? ` / ${catTotal.toLocaleString()}` : ''}</span>
+                  <span>{cat.label}</span>
+                  <span>{catSynced.toLocaleString()} / {catTotal.toLocaleString()}</span>
                 </div>
                 <div className="h-1.5 rounded-full overflow-hidden" style={{ background: 'var(--green-200)' }}>
                   <div className="h-full rounded-full transition-all duration-300"
@@ -294,7 +337,7 @@ export default function PcoSyncPanel() {
           })}
 
           <div className="text-xs sans mt-3 text-right" style={{ color: 'var(--green-700)' }}>
-            {progress.totalSynced.toLocaleString()} records synced
+            {progress.totalSynced.toLocaleString()} new records this sync
           </div>
         </div>
       )}
@@ -357,7 +400,6 @@ export default function PcoSyncPanel() {
           </p>
         </div>
       )}
-
     </div>
   )
 }
