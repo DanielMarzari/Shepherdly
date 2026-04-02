@@ -1,5 +1,7 @@
 import { createClient } from '@/lib/supabase/server'
+import PcoConnectionStatus from './PcoConnectionStatus'
 import PcoSettingsForm from './PcoSettingsForm'
+import PcoAutoSyncSettings from './PcoAutoSyncSettings'
 import PcoSyncPanel from './PcoSyncPanel'
 
 export default async function PcoSettingsPage() {
@@ -10,12 +12,19 @@ export default async function PcoSettingsPage() {
     .limit(1)
     .single()
 
+  const hasCreds = !!(settings?.pco_app_id && settings?.pco_app_secret)
+
   return (
     <div className="p-8">
       <h1 className="text-3xl font-serif mb-1" style={{ color: 'var(--foreground)' }}>PCO Connection</h1>
-      <p className="sans text-sm mb-8" style={{ color: 'var(--foreground-muted)' }}>
+      <p className="sans text-sm mb-6" style={{ color: 'var(--foreground-muted)' }}>
         Connect Shepherdly to Planning Center Online to sync your people, groups, and attendance.
       </p>
+
+      {/* Connection status — full width, above everything */}
+      <div className="mb-6">
+        <PcoConnectionStatus hasExistingCreds={hasCreds} />
+      </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 items-start">
         {/* Left column — Credentials */}
@@ -62,11 +71,12 @@ export default async function PcoSettingsPage() {
             </p>
           </div>
 
-          <PcoSettingsForm hasExistingCreds={!!(settings?.pco_app_id && settings?.pco_app_secret)} />
+          <PcoSettingsForm hasExistingCreds={hasCreds} />
         </div>
 
-        {/* Right column — Sync */}
-        <div>
+        {/* Right column — Auto-sync settings + Manual sync */}
+        <div className="space-y-5">
+          <PcoAutoSyncSettings />
           <PcoSyncPanel />
         </div>
       </div>

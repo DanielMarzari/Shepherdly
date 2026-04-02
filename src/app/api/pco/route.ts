@@ -59,6 +59,13 @@ export async function GET(request: NextRequest) {
     })
   }
 
+  if (action === 'auto_sync_settings') {
+    return NextResponse.json({
+      enabled: settings.pco_sync_enabled ?? false,
+      frequency: (settings as any).pco_sync_frequency ?? 'daily',
+    })
+  }
+
   return NextResponse.json({ error: 'Unknown action' }, { status: 400 })
 }
 
@@ -110,6 +117,22 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ success: true, orgName: validation.orgName })
   }
 
+  // ── Save auto-sync settings ─────────────────────────────────
+  if (body.action === 'save_auto_sync') {
+    const { enabled, frequency } = body
+    const { error } = await admin
+      .from('church_settings')
+      .update({
+        pco_sync_enabled: !!enabled,
+        pco_sync_frequency: frequency || 'daily',
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', settings.id)
+
+    if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+    return NextResponse.json({ success: true })
+  }
+
   // ── Start sync (creates log entry, returns totals for planning) ──
   if (body.action === 'sync_start') {
     if (!settings.pco_app_id || !settings.pco_app_secret) {
@@ -118,14 +141,27 @@ export async function POST(request: NextRequest) {
 
     const client = createPcoClient(settings.pco_app_id, settings.pco_app_secret)
 
-    // Get total counts from PCO so the client knows how many pages to expect
+    // Determine last sync timestamps per resource for incremental sync
+    const updatedSince: Record<string, string | null> = {}
+    updatedSince.people = await getLastPcoUpdated(admin, 'pco_people')
+    updatedSince.groups = await getLastPcoUpdated(admin, 'pco_groups')
+    updatedSince.teams = await getLastPcoUpdated(admin, 'pco_teams')
+
+    const isIncremental = !!(updatedSince.people || updatedSince.groups || updatedSince.teams)
+
+    // Get total counts — filtered by updated_at if incremental
     const totals: Record<string, number> = {}
     try {
-      const peopleRes = await client.get('/people/v2/people', { per_page: '1' })
+      const params: Record<string, string> = { per_page: '1', order: 'updated_at' }
+      if (updatedSince.people) params['where[updated_at][gte]'] = updatedSince.people
+      const peopleRes = await client.get('/people/v2/people', params)
       totals.people = peopleRes.meta?.total_count || 0
     } catch { totals.people = 0 }
 
     try {
+      // Groups API doesn't support where[] filters the same way,
+      // so we fetch all and let upsert handle deduplication.
+      // For incremental, we still track the count.
       const groupsRes = await client.get('/groups/v2/groups', { per_page: '1' })
       totals.groups = groupsRes.meta?.total_count || 0
     } catch { totals.groups = 0 }
@@ -143,17 +179,17 @@ export async function POST(request: NextRequest) {
         triggered_by: user.id,
         started_at: new Date().toISOString(),
         records_synced: 0,
-        details: { totals },
+        details: { totals, isIncremental, updatedSince },
       })
       .select()
       .single()
 
-    return NextResponse.json({ syncLogId: syncLog!.id, totals })
+    return NextResponse.json({ syncLogId: syncLog!.id, totals, updatedSince, isIncremental })
   }
 
   // ── Sync one page of a resource ──────────────────────────────
   if (body.action === 'sync_page') {
-    const { resource, offset = 0, syncLogId } = body
+    const { resource, offset = 0, syncLogId, updatedSince } = body
     if (!['people', 'groups', 'teams'].includes(resource)) {
       return NextResponse.json({ error: 'Invalid resource' }, { status: 400 })
     }
@@ -176,10 +212,9 @@ export async function POST(request: NextRequest) {
           offset: String(offset),
           order: 'updated_at',
         }
-        // Incremental: only fetch records updated since last sync
-        const lastUpdated = await getLastPcoUpdated(admin, 'pco_people')
-        if (lastUpdated && offset === 0) {
-          // Only apply the filter on the first page — offset handles the rest
+        // Incremental: only fetch records updated since our last sync
+        if (updatedSince) {
+          params['where[updated_at][gte]'] = updatedSince
         }
 
         const result = await client.get('/people/v2/people', params)

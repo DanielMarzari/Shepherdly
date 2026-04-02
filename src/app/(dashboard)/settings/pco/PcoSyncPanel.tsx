@@ -70,7 +70,7 @@ export default function PcoSyncPanel() {
       const startData = await startRes.json()
       if (!startRes.ok) throw new Error(startData.error || 'Failed to start sync')
 
-      const { syncLogId, totals } = startData
+      const { syncLogId, totals, updatedSince, isIncremental } = startData
       const totalExpected = (totals.people || 0) + (totals.groups || 0) + (totals.teams || 0)
 
       setProgress(p => p ? {
@@ -91,6 +91,8 @@ export default function PcoSyncPanel() {
 
         let offset = 0
         let resourceSynced = 0
+        // Pass updatedSince for this resource so the API filters by it
+        const resourceUpdatedSince = updatedSince?.[resource] || null
 
         while (true) {
           if (abortRef.current) break
@@ -98,7 +100,7 @@ export default function PcoSyncPanel() {
           const pageRes = await fetch('/api/pco', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ action: 'sync_page', resource, offset, syncLogId }),
+            body: JSON.stringify({ action: 'sync_page', resource, offset, syncLogId, updatedSince: resourceUpdatedSince }),
           })
           const pageData = await pageRes.json()
 

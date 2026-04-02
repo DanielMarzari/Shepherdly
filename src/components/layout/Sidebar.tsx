@@ -110,12 +110,12 @@ export default function Sidebar({ user }: { user: AppUser }) {
 
       {/* User profile */}
       <div className="px-4 py-4 border-t" style={{ borderColor: 'rgba(255,255,255,0.1)' }}>
-        <div className="flex items-center gap-3 mb-3">
+        <div className="flex items-center gap-3">
           <div className="w-9 h-9 rounded-full flex items-center justify-center text-sm font-medium sans shrink-0"
             style={{ background: ROLE_COLORS[user.role] || 'var(--accent)', color: 'white' }}>
             {(user.full_name || user.email).charAt(0).toUpperCase()}
           </div>
-          <div className="min-w-0">
+          <div className="min-w-0 flex-1">
             <div className="text-white text-sm font-medium sans truncate">
               {user.full_name || 'Set your name'}
             </div>
@@ -123,13 +123,14 @@ export default function Sidebar({ user }: { user: AppUser }) {
               {ROLE_LABELS[user.role]}
             </div>
           </div>
+          <button
+            onClick={handleSignOut}
+            className="shrink-0 p-1.5 rounded-lg transition-all"
+            style={{ color: 'rgba(255,255,255,0.4)' }}
+            title="Sign out">
+            <SignOutIcon size={16} />
+          </button>
         </div>
-        <button
-          onClick={handleSignOut}
-          className="w-full text-xs sans py-1.5 px-3 rounded-lg transition-all text-left"
-          style={{ color: 'rgba(255,255,255,0.5)', background: 'rgba(255,255,255,0.05)' }}>
-          Sign out
-        </button>
       </div>
     </aside>
   )
@@ -165,4 +166,7 @@ function UsersIcon({ size }: { size: number }) {
 }
 function SyncIcon({ size }: { size: number }) {
   return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><polyline points="1 4 1 10 7 10"/><polyline points="23 20 23 14 17 14"/><path d="M20.49 9A9 9 0 0 0 5.64 5.64L1 10m22 4l-4.64 4.36A9 9 0 0 1 3.51 15"/></svg>
+}
+function SignOutIcon({ size }: { size: number }) {
+  return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
 }
