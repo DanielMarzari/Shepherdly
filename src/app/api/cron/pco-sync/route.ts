@@ -1,11 +1,16 @@
 import { createAdminClient } from '@/lib/supabase/admin'
 import { createPcoClient } from '@/lib/pco'
-import { SYNC_RESOURCES, getResourceCount, fetchResourcePage } from '@/lib/pco-sync'
+import {
+  SYNC_RESOURCES,
+  getResourceCount, fetchResourcePage,
+  getNestedResourceInfo, fetchNestedPage,
+  resolvePcoIds,
+} from '@/lib/pco-sync'
 import { NextRequest, NextResponse } from 'next/server'
 
 /**
  * Vercel Cron endpoint for automated PCO sync.
- * Runs daily (or per configured frequency) to keep people/groups/teams in sync.
+ * Runs daily at 6am UTC (configured in vercel.json).
  */
 export async function GET(request: NextRequest) {
   // Verify cron secret (Vercel sets this header)
@@ -27,7 +32,7 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ skipped: true, reason: 'Auto-sync disabled' })
   }
 
-  // Get active credentials (first church — single-church app)
+  // Get active credentials
   const { data: credentials } = await admin
     .from('planning_center_credentials')
     .select('*')
@@ -60,39 +65,103 @@ export async function GET(request: NextRequest) {
 
   try {
     for (const resource of SYNC_RESOURCES) {
-      const pcoCount = await getResourceCount(client, resource)
-      if (pcoCount === 0) continue
+      if (resource.isNested) {
+        // ── Nested resources: iterate parents ──────────────────
+        const { cursor } = await getNestedResourceInfo(client, resource, admin, churchId!)
+        if (cursor.parents.length === 0) continue
 
-      // For replace strategy, delete existing first
-      if (resource.syncStrategy === 'replace') {
-        await admin.from(resource.table).delete().eq('church_id', churchId!)
-      }
-
-      // Paginate through all records
-      let offset = 0
-      let hasMore = true
-      while (hasMore) {
-        const { rows, hasMore: more } = await fetchResourcePage(client, resource, offset, 100)
-
-        if (rows.length > 0) {
-          const rowsWithChurch = rows.map(r => ({ ...r, church_id: churchId }))
-          if (resource.syncStrategy === 'replace') {
-            await admin.from(resource.table).insert(rowsWithChurch)
-          } else {
-            await admin.from(resource.table).upsert(rowsWithChurch, { onConflict: resource.onConflict })
-          }
-          totalSynced += rows.length
+        // For replace strategy, delete existing
+        if (resource.syncStrategy === 'replace') {
+          await admin.from(resource.table).delete().eq('church_id', churchId!)
         }
 
-        hasMore = more
-        offset += 100
+        let currentCursor = cursor
+        while (true) {
+          const { rows, hasMore, nextCursor } = await fetchNestedPage(
+            client, resource, currentCursor, 100
+          )
+
+          if (rows.length > 0) {
+            let resolvedRows = rows
+            if (resource.idMappings && resource.idMappings.length > 0) {
+              resolvedRows = await resolvePcoIds(admin, rows, resource.idMappings, churchId!)
+            }
+
+            const rowsWithChurch = resolvedRows.map(r => ({ ...r, church_id: churchId }))
+            if (rowsWithChurch.length > 0) {
+              if (resource.syncStrategy === 'replace') {
+                await admin.from(resource.table).insert(rowsWithChurch)
+              } else {
+                await admin.from(resource.table).upsert(rowsWithChurch, { onConflict: resource.onConflict })
+              }
+              totalSynced += rowsWithChurch.length
+            }
+          }
+
+          if (!hasMore || !nextCursor) break
+          currentCursor = nextCursor
+        }
+      } else {
+        // ── Flat resources ─────────────────────────────────────
+        const pcoCount = await getResourceCount(client, resource)
+        if (pcoCount === 0) continue
+
+        if (resource.syncStrategy === 'replace') {
+          await admin.from(resource.table).delete().eq('church_id', churchId!)
+        }
+
+        let offset = 0
+        let hasMore = true
+        while (hasMore) {
+          const { rows, hasMore: more } = await fetchResourcePage(client, resource, offset, 100)
+
+          if (rows.length > 0) {
+            let resolvedRows = rows
+            if (resource.idMappings && resource.idMappings.length > 0) {
+              resolvedRows = await resolvePcoIds(admin, rows, resource.idMappings, churchId!)
+            }
+
+            const rowsWithChurch = resolvedRows.map(r => ({ ...r, church_id: churchId }))
+            if (rowsWithChurch.length > 0) {
+              if (resource.syncStrategy === 'replace') {
+                await admin.from(resource.table).insert(rowsWithChurch)
+              } else {
+                await admin.from(resource.table).upsert(rowsWithChurch, { onConflict: resource.onConflict })
+              }
+              totalSynced += rowsWithChurch.length
+            }
+          }
+
+          hasMore = more
+          offset += 100
+        }
       }
     }
 
-    // Post-sync hooks
-    const thirtyDaysAgo = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString().split('T')[0]
-    await admin.rpc('update_attendance_counts', { since_date: thirtyDaysAgo })
-    await admin.rpc('update_engagement_scores')
+    // Post-sync: link FK columns
+    try {
+      const { data: groupTypes } = await admin
+        .from('group_types').select('id, pco_id').eq('church_id', churchId!)
+      for (const gt of groupTypes || []) {
+        await admin.from('groups').update({ group_type_id: gt.id })
+          .eq('church_id', churchId!).eq('pco_group_type_id', gt.pco_id)
+      }
+      const { data: serviceTypes } = await admin
+        .from('service_types').select('id, pco_id').eq('church_id', churchId!)
+      for (const st of serviceTypes || []) {
+        await admin.from('teams').update({ service_type_id: st.id })
+          .eq('church_id', churchId!).eq('pco_service_type_id', st.pco_id)
+      }
+    } catch (e) {
+      console.error('Cron: FK linking failed:', e)
+    }
+
+    // Post-sync: refresh analytics
+    try {
+      await admin.rpc('refresh_person_analytics')
+    } catch (e) {
+      console.error('Cron: analytics refresh failed:', e)
+    }
 
     // Mark success
     await admin.from('pco_sync_log').update({

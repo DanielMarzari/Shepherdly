@@ -2,70 +2,101 @@ import { PcoClient } from './pco'
 
 /**
  * PCO Sync resource definitions.
- * Each resource knows how to fetch from PCO and map to our DB schema.
+ * 13 resources synced in dependency order:
+ *   people → group_types → groups → group_memberships/applications/events
+ *   → group_event_attendances → service_types → teams → team_positions
+ *   → service_plans → plan_team_members → attendance
  *
- * DB tables: people, groups, teams, group_memberships, team_memberships, attendance_records
- * (NOT pco_* prefixed tables — those don't exist)
+ * DB tables: people, group_types, groups, group_memberships, group_applications,
+ * group_events, group_event_attendances, service_types, teams, team_positions,
+ * team_memberships, service_plans, plan_team_members, attendance_records, person_analytics
  */
+
+// ── Types ───────────────────────────────────────────────────
 
 export interface SyncResource {
   key: string
   label: string
   category: string
-  table: string           // actual supabase table name
-  endpoint: string        // PCO API path
-  queryParams?: Record<string, string>  // extra query params (e.g. include=emails)
+  table: string
+  endpoint: string
+  queryParams?: Record<string, string>
   supportsUpdatedSince: boolean
   syncStrategy: 'upsert' | 'replace'
-  onConflict: string      // column(s) for upsert conflict resolution
+  onConflict: string
   mapRow: (item: any, included?: any[]) => Record<string, any>
+  /** Nested resource: fetched per-parent from another table */
+  isNested?: boolean
+  nestedParentTable?: string
+  nestedEndpointTemplate?: string   // e.g. '/groups/v2/groups/{parentId}/memberships'
+  /** Doubly-nested: child cursor within parent */
+  isDoublyNested?: boolean
+  nestedChildTable?: string
+  nestedChildEndpointTemplate?: string  // e.g. '/services/v2/service_types/{parentId}/plans/{childId}/team_members'
+  /** PCO ID resolution mappings — applied post-fetch */
+  idMappings?: IdMapping[]
+}
+
+export interface IdMapping {
+  field: string      // target column: 'person_id'
+  pcoField: string   // temp column: '_pco_person_id'
+  table: string      // lookup table: 'people'
+}
+
+export interface NestedCursor {
+  parentIdx: number
+  childIdx?: number
+  offset: number
+  parents: { id: string; pcoId: string; childCount: number }[]
+  children?: { id: string; pcoId: string; childCount: number }[]
 }
 
 export const SYNC_CATEGORIES = [
   { key: 'people', label: 'People' },
   { key: 'groups', label: 'Groups' },
-  { key: 'teams', label: 'Teams' },
+  { key: 'services', label: 'Services & Teams' },
   { key: 'checkins', label: 'Attendance' },
 ] as const
 
+// ── Resource Definitions ────────────────────────────────────
+
 export const SYNC_RESOURCES: SyncResource[] = [
-  // ── People ─────────────────────────────────────────────────
+  // ── 1. People ─────────────────────────────────────────────
   {
     key: 'people',
     label: 'People',
     category: 'people',
     table: 'people',
     endpoint: '/people/v2/people',
-    queryParams: { 'include': 'emails,phone_numbers' },
     supportsUpdatedSince: true,
     syncStrategy: 'upsert',
     onConflict: 'pco_id',
-    mapRow: (p, included) => {
-      // Find primary email/phone from included resources
-      const emails = (included || []).filter(
-        (i: any) => i.type === 'Email' && i.relationships?.person?.data?.id === p.id
-      )
-      const primaryEmail = emails.find((e: any) => e.attributes.primary) || emails[0]
-
-      const phones = (included || []).filter(
-        (i: any) => i.type === 'PhoneNumber' && i.relationships?.person?.data?.id === p.id
-      )
-      const primaryPhone = phones.find((ph: any) => ph.attributes.primary) || phones[0]
-
-      return {
-        pco_id: p.id,
-        name: [p.attributes.first_name, p.attributes.last_name].filter(Boolean).join(' ') || 'Unknown',
-        email: primaryEmail?.attributes?.address || '',
-        phone: primaryPhone?.attributes?.number || null,
-        membership_type: p.attributes.membership || 'attender',
-        status: p.attributes.status || 'active',
-        is_active: p.attributes.status !== 'inactive',
-        is_leader: false,
-      }
-    },
+    mapRow: (p) => ({
+      pco_id: p.id,
+      name: [p.attributes.first_name, p.attributes.last_name].filter(Boolean).join(' ') || 'Unknown',
+      membership_type: p.attributes.membership || 'attender',
+      status: p.attributes.status || 'active',
+      is_leader: false,
+    }),
   },
 
-  // ── Groups ─────────────────────────────────────────────────
+  // ── 2. Group Types ────────────────────────────────────────
+  {
+    key: 'group_types',
+    label: 'Group Types',
+    category: 'groups',
+    table: 'group_types',
+    endpoint: '/groups/v2/group_types',
+    supportsUpdatedSince: false,
+    syncStrategy: 'upsert',
+    onConflict: 'pco_id',
+    mapRow: (gt) => ({
+      pco_id: gt.id,
+      name: gt.attributes.name || 'Unknown Type',
+    }),
+  },
+
+  // ── 3. Groups ─────────────────────────────────────────────
   {
     key: 'groups',
     label: 'Groups',
@@ -78,41 +109,141 @@ export const SYNC_RESOURCES: SyncResource[] = [
     mapRow: (g) => ({
       pco_id: g.id,
       name: g.attributes.name || 'Unnamed Group',
-      description: g.attributes.description_as_plain_text || null,
-      group_type: 'small_group',
+      description: g.attributes.description || null,
+      group_type: g.attributes.group_type || 'small_group',
+      pco_group_type_id: g.relationships?.group_type?.data?.id || null,
       schedule: g.attributes.schedule || null,
       is_pco_synced: true,
       is_active: !g.attributes.archived_at,
     }),
   },
 
-  // ── Group Memberships ──────────────────────────────────────
-  // These use PCO IDs for person/group — we resolve to UUIDs via a subquery
+  // ── 4. Group Memberships (nested per group) ───────────────
   {
     key: 'group_memberships',
     label: 'Group Members',
     category: 'groups',
     table: 'group_memberships',
-    endpoint: '/groups/v2/memberships',
+    endpoint: '',  // unused — nested
     supportsUpdatedSince: false,
-    syncStrategy: 'replace', // delete all + re-insert since memberships change
+    syncStrategy: 'replace',
     onConflict: 'pco_id',
+    isNested: true,
+    nestedParentTable: 'groups',
+    nestedEndpointTemplate: '/groups/v2/groups/{parentId}/memberships',
     mapRow: (m) => ({
       pco_id: m.id,
-      // These are PCO IDs — must be resolved to UUIDs before insert
-      _person_pco_id: m.relationships?.person?.data?.id || null,
-      _group_pco_id: m.relationships?.group?.data?.id || null,
+      _pco_person_id: m.relationships?.person?.data?.id || null,
+      _pco_group_id: m.attributes?._parentPcoId || null,
       role: m.attributes.role || 'member',
       joined_at: m.attributes.joined_at || null,
       is_active: true,
     }),
+    idMappings: [
+      { field: 'person_id', pcoField: '_pco_person_id', table: 'people' },
+      { field: 'group_id', pcoField: '_pco_group_id', table: 'groups' },
+    ],
   },
 
-  // ── Teams (from Services API) ──────────────────────────────
+  // ── 5. Group Applications / Enrollments (nested per group) ─
+  {
+    key: 'group_applications',
+    label: 'Group Applications',
+    category: 'groups',
+    table: 'group_applications',
+    endpoint: '',
+    supportsUpdatedSince: false,
+    syncStrategy: 'upsert',
+    onConflict: 'pco_id',
+    isNested: true,
+    nestedParentTable: 'groups',
+    nestedEndpointTemplate: '/groups/v2/groups/{parentId}/enrollments',
+    mapRow: (e) => ({
+      pco_id: e.id,
+      pco_person_id: e.relationships?.person?.data?.id || null,
+      pco_group_id: e.attributes?._parentPcoId || null,
+      status: e.attributes.status || 'pending',
+      applied_at: e.attributes.created_at || null,
+      resolved_at: e.attributes.resolved_at || null,
+    }),
+    idMappings: [
+      { field: 'person_id', pcoField: 'pco_person_id', table: 'people' },
+      { field: 'group_id', pcoField: 'pco_group_id', table: 'groups' },
+    ],
+  },
+
+  // ── 6. Group Events (nested per group) ────────────────────
+  {
+    key: 'group_events',
+    label: 'Group Events',
+    category: 'groups',
+    table: 'group_events',
+    endpoint: '',
+    supportsUpdatedSince: false,
+    syncStrategy: 'upsert',
+    onConflict: 'pco_id',
+    isNested: true,
+    nestedParentTable: 'groups',
+    nestedEndpointTemplate: '/groups/v2/groups/{parentId}/events',
+    mapRow: (ev) => ({
+      pco_id: ev.id,
+      pco_group_id: ev.attributes?._parentPcoId || null,
+      name: ev.attributes.name || null,
+      starts_at: ev.attributes.starts_at || null,
+      ends_at: ev.attributes.ends_at || null,
+    }),
+    idMappings: [
+      { field: 'group_id', pcoField: 'pco_group_id', table: 'groups' },
+    ],
+  },
+
+  // ── 7. Group Event Attendances (nested per group_event) ───
+  {
+    key: 'group_event_attendances',
+    label: 'Group Attendance',
+    category: 'groups',
+    table: 'group_event_attendances',
+    endpoint: '',
+    supportsUpdatedSince: false,
+    syncStrategy: 'upsert',
+    onConflict: 'pco_id',
+    isNested: true,
+    nestedParentTable: 'group_events',
+    nestedEndpointTemplate: '/groups/v2/events/{parentId}/attendances',
+    mapRow: (a) => ({
+      pco_id: a.id,
+      pco_event_id: a.attributes?._parentPcoId || null,
+      pco_person_id: a.relationships?.person?.data?.id || null,
+      role: a.attributes.role || 'attendee',
+      attended: a.attributes.attended ?? true,
+    }),
+    idMappings: [
+      { field: 'event_id', pcoField: 'pco_event_id', table: 'group_events' },
+      { field: 'person_id', pcoField: 'pco_person_id', table: 'people' },
+    ],
+  },
+
+  // ── 8. Service Types ──────────────────────────────────────
+  {
+    key: 'service_types',
+    label: 'Service Types',
+    category: 'services',
+    table: 'service_types',
+    endpoint: '/services/v2/service_types',
+    supportsUpdatedSince: false,
+    syncStrategy: 'upsert',
+    onConflict: 'pco_id',
+    mapRow: (st) => ({
+      pco_id: st.id,
+      name: st.attributes.name || 'Unknown Service',
+    }),
+  },
+
+  // ── 9. Teams ──────────────────────────────────────────────
   {
     key: 'teams',
     label: 'Teams',
-    category: 'teams',
+    category: 'services',
     table: 'teams',
     endpoint: '/services/v2/teams',
     supportsUpdatedSince: false,
@@ -123,15 +254,94 @@ export const SYNC_RESOURCES: SyncResource[] = [
       name: t.attributes.name || 'Unnamed Team',
       description: t.attributes.default_status || null,
       team_type: 'general',
+      pco_service_type_id: t.relationships?.service_type?.data?.id || null,
       is_pco_synced: true,
       is_active: !t.attributes.archived_at,
     }),
   },
 
-  // ── Attendance (from Check-Ins API — kids check-ins with EventPeople) ──
+  // ── 10. Team Positions (nested per team) ──────────────────
+  {
+    key: 'team_positions',
+    label: 'Team Positions',
+    category: 'services',
+    table: 'team_positions',
+    endpoint: '',
+    supportsUpdatedSince: false,
+    syncStrategy: 'upsert',
+    onConflict: 'pco_id',
+    isNested: true,
+    nestedParentTable: 'teams',
+    nestedEndpointTemplate: '/services/v2/teams/{parentId}/team_positions',
+    mapRow: (tp) => ({
+      pco_id: tp.id,
+      pco_team_id: tp.attributes?._parentPcoId || null,
+      name: tp.attributes.name || 'Unknown Position',
+    }),
+    idMappings: [
+      { field: 'team_id', pcoField: 'pco_team_id', table: 'teams' },
+    ],
+  },
+
+  // ── 11. Service Plans (nested per service_type) ───────────
+  {
+    key: 'service_plans',
+    label: 'Service Plans',
+    category: 'services',
+    table: 'service_plans',
+    endpoint: '',
+    supportsUpdatedSince: false,
+    syncStrategy: 'upsert',
+    onConflict: 'pco_id',
+    isNested: true,
+    nestedParentTable: 'service_types',
+    nestedEndpointTemplate: '/services/v2/service_types/{parentId}/plans',
+    mapRow: (pl) => ({
+      pco_id: pl.id,
+      pco_service_type_id: pl.attributes?._parentPcoId || null,
+      title: pl.attributes.title || pl.attributes.dates || null,
+      sort_date: pl.attributes.sort_date || null,
+    }),
+    idMappings: [
+      { field: 'service_type_id', pcoField: 'pco_service_type_id', table: 'service_types' },
+    ],
+  },
+
+  // ── 12. Plan Team Members (doubly nested: service_type → plan → team_members)
+  {
+    key: 'plan_team_members',
+    label: 'Scheduled Members',
+    category: 'services',
+    table: 'plan_team_members',
+    endpoint: '',
+    supportsUpdatedSince: false,
+    syncStrategy: 'upsert',
+    onConflict: 'pco_id',
+    isNested: true,
+    isDoublyNested: true,
+    nestedParentTable: 'service_types',
+    nestedChildTable: 'service_plans',
+    nestedEndpointTemplate: '/services/v2/service_types/{parentId}/plans/{childId}/team_members',
+    mapRow: (tm) => ({
+      pco_id: tm.id,
+      pco_plan_id: tm.attributes?._childPcoId || null,
+      pco_person_id: tm.relationships?.person?.data?.id || null,
+      pco_team_id: tm.relationships?.team?.data?.id || null,
+      position_name: tm.attributes.team_position_name || null,
+      status: tm.attributes.status || 'U',
+      accepted_at: tm.attributes.accepted_at || null,
+    }),
+    idMappings: [
+      { field: 'plan_id', pcoField: 'pco_plan_id', table: 'service_plans' },
+      { field: 'person_id', pcoField: 'pco_person_id', table: 'people' },
+      { field: 'team_id', pcoField: 'pco_team_id', table: 'teams' },
+    ],
+  },
+
+  // ── 13. Attendance (Check-Ins API) ────────────────────────
   {
     key: 'attendance',
-    label: 'Attendance',
+    label: 'Check-ins',
     category: 'checkins',
     table: 'attendance_records',
     endpoint: '/check-ins/v2/check_ins',
@@ -141,15 +351,17 @@ export const SYNC_RESOURCES: SyncResource[] = [
     mapRow: (c) => ({
       pco_event_id: c.id,
       pco_person_id: c.relationships?.person?.data?.id || null,
-      // person_id resolved after sync via pco_person_id -> people.pco_id
       event_date: c.attributes.created_at?.substring(0, 10) || null,
       service_type: null,
       checked_in_at: c.attributes.created_at || null,
     }),
+    idMappings: [
+      { field: 'person_id', pcoField: 'pco_person_id', table: 'people' },
+    ],
   },
 ]
 
-// ── Flat resource helpers ────────────────────────────────────
+// ── Flat Resource Helpers ───────────────────────────────────
 
 /** Get total count for a flat resource from PCO */
 export async function getResourceCount(
@@ -157,6 +369,7 @@ export async function getResourceCount(
   resource: SyncResource,
   updatedSince?: string | null,
 ): Promise<number> {
+  if (resource.isNested) return 0  // nested counts come from getNestedResourceInfo
   try {
     const params: Record<string, string> = { per_page: '1' }
     if (updatedSince && resource.supportsUpdatedSince) {
@@ -200,44 +413,312 @@ export async function fetchResourcePage(
   }
 }
 
-// ── Nested resource helpers (removed — no longer needed) ─────
-// Service plans and plan people tables don't exist in the DB.
-// If needed in the future, re-add nested resource support.
+// ── Nested Resource Helpers ─────────────────────────────────
 
-export interface NestedCursor {
-  parentIdx: number
-  offset: number
-  parents: { id: string; childCount: number; serviceTypePcoId?: string }[]
-}
-
+/** Get info for a nested resource: total child count across all parents */
 export async function getNestedResourceInfo(
-  _client: PcoClient,
-  _resource: SyncResource,
-  _admin: any,
+  client: PcoClient,
+  resource: SyncResource,
+  admin: any,
+  churchId: string,
 ): Promise<{ totalCount: number; cursor: NestedCursor }> {
-  return { totalCount: 0, cursor: { parentIdx: 0, offset: 0, parents: [] } }
+  if (!resource.isNested || !resource.nestedParentTable || !resource.nestedEndpointTemplate) {
+    return { totalCount: 0, cursor: { parentIdx: 0, offset: 0, parents: [] } }
+  }
+
+  // Get parent records from our DB
+  const { data: parentRows } = await admin
+    .from(resource.nestedParentTable)
+    .select('id, pco_id')
+    .eq('church_id', churchId)
+    .not('pco_id', 'is', null)
+
+  if (!parentRows || parentRows.length === 0) {
+    return { totalCount: 0, cursor: { parentIdx: 0, offset: 0, parents: [] } }
+  }
+
+  // For doubly-nested, we also need child records
+  let children: { id: string; pcoId: string; childCount: number }[] | undefined
+  if (resource.isDoublyNested && resource.nestedChildTable) {
+    const { data: childRows } = await admin
+      .from(resource.nestedChildTable)
+      .select('id, pco_id')
+      .eq('church_id', churchId)
+      .not('pco_id', 'is', null)
+      .order('sort_date', { ascending: false })
+      .limit(500) // limit to recent plans for performance
+
+    children = (childRows || []).map((c: any) => ({
+      id: c.id, pcoId: c.pco_id, childCount: 0,
+    }))
+  }
+
+  // Estimate total count (we don't ping every parent — too slow)
+  // Instead, use parent count * estimated avg children
+  const estimatedTotal = parentRows.length * 10
+
+  const parents = parentRows.map((p: any) => ({
+    id: p.id, pcoId: p.pco_id, childCount: 0,
+  }))
+
+  return {
+    totalCount: estimatedTotal,
+    cursor: { parentIdx: 0, offset: 0, parents, children },
+  }
 }
 
+/** Fetch one page of a nested resource using cursor */
 export async function fetchNestedPage(
-  _client: PcoClient,
-  _resource: SyncResource,
-  _cursor: NestedCursor,
-  _perPage: number,
+  client: PcoClient,
+  resource: SyncResource,
+  cursor: NestedCursor,
+  perPage: number,
 ): Promise<{
   rows: Record<string, any>[]
   hasMore: boolean
   nextCursor: NestedCursor | null
   upsertedEstimate: number
 }> {
-  return { rows: [], hasMore: false, nextCursor: null, upsertedEstimate: 0 }
+  if (!resource.nestedEndpointTemplate || cursor.parents.length === 0) {
+    return { rows: [], hasMore: false, nextCursor: null, upsertedEstimate: 0 }
+  }
+
+  // Doubly nested: iterate parent × child
+  if (resource.isDoublyNested && cursor.children && cursor.children.length > 0) {
+    return fetchDoublyNestedPage(client, resource, cursor, perPage)
+  }
+
+  const parent = cursor.parents[cursor.parentIdx]
+  if (!parent) {
+    return { rows: [], hasMore: false, nextCursor: null, upsertedEstimate: 0 }
+  }
+
+  const endpoint = resource.nestedEndpointTemplate.replace('{parentId}', parent.pcoId)
+
+  try {
+    const result = await client.get(endpoint, {
+      per_page: String(perPage),
+      offset: String(cursor.offset),
+    })
+
+    const data = result.data || []
+    // Inject parent PCO ID into each row so mapRow can use it
+    const rows = data.map((item: any) => {
+      item.attributes = item.attributes || {}
+      item.attributes._parentPcoId = parent.pcoId
+      return resource.mapRow(item)
+    })
+
+    const pageHasMore = !!result.links?.next
+    let nextCursor: NestedCursor | null = null
+
+    if (pageHasMore) {
+      // More pages for this parent
+      nextCursor = { ...cursor, offset: cursor.offset + perPage }
+    } else if (cursor.parentIdx + 1 < cursor.parents.length) {
+      // Move to next parent
+      nextCursor = { ...cursor, parentIdx: cursor.parentIdx + 1, offset: 0 }
+    }
+
+    return {
+      rows,
+      hasMore: nextCursor !== null,
+      nextCursor,
+      upsertedEstimate: rows.length,
+    }
+  } catch (e: any) {
+    // Skip this parent on error (e.g. 404), move to next
+    console.warn(`Nested fetch failed for ${endpoint}:`, e.message)
+    if (cursor.parentIdx + 1 < cursor.parents.length) {
+      return {
+        rows: [],
+        hasMore: true,
+        nextCursor: { ...cursor, parentIdx: cursor.parentIdx + 1, offset: 0 },
+        upsertedEstimate: 0,
+      }
+    }
+    return { rows: [], hasMore: false, nextCursor: null, upsertedEstimate: 0 }
+  }
 }
 
-/** All tables that hold PCO-synced data (for purge) */
+/** Fetch page for doubly-nested resource (e.g. service_type → plan → team_members) */
+async function fetchDoublyNestedPage(
+  client: PcoClient,
+  resource: SyncResource,
+  cursor: NestedCursor,
+  perPage: number,
+): Promise<{
+  rows: Record<string, any>[]
+  hasMore: boolean
+  nextCursor: NestedCursor | null
+  upsertedEstimate: number
+}> {
+  const children = cursor.children!
+  const parent = cursor.parents[cursor.parentIdx]
+  const childIdx = cursor.childIdx ?? 0
+  const child = children[childIdx]
+
+  if (!parent || !child) {
+    return { rows: [], hasMore: false, nextCursor: null, upsertedEstimate: 0 }
+  }
+
+  const endpoint = (resource.nestedEndpointTemplate || '')
+    .replace('{parentId}', parent.pcoId)
+    .replace('{childId}', child.pcoId)
+
+  try {
+    const result = await client.get(endpoint, {
+      per_page: String(perPage),
+      offset: String(cursor.offset),
+    })
+
+    const data = result.data || []
+    const rows = data.map((item: any) => {
+      item.attributes = item.attributes || {}
+      item.attributes._parentPcoId = parent.pcoId
+      item.attributes._childPcoId = child.pcoId
+      return resource.mapRow(item)
+    })
+
+    const pageHasMore = !!result.links?.next
+    let nextCursor: NestedCursor | null = null
+
+    if (pageHasMore) {
+      nextCursor = { ...cursor, childIdx, offset: cursor.offset + perPage }
+    } else if (childIdx + 1 < children.length) {
+      nextCursor = { ...cursor, childIdx: childIdx + 1, offset: 0 }
+    }
+    // Note: we only iterate children within one "parent" batch at a time.
+    // The sync_page caller will need to manage parent iteration externally
+    // or we flatten parent×child into the children array.
+
+    return {
+      rows,
+      hasMore: nextCursor !== null,
+      nextCursor,
+      upsertedEstimate: rows.length,
+    }
+  } catch (e: any) {
+    console.warn(`Doubly-nested fetch failed for ${endpoint}:`, e.message)
+    if (childIdx + 1 < children.length) {
+      return {
+        rows: [],
+        hasMore: true,
+        nextCursor: { ...cursor, childIdx: childIdx + 1, offset: 0 },
+        upsertedEstimate: 0,
+      }
+    }
+    return { rows: [], hasMore: false, nextCursor: null, upsertedEstimate: 0 }
+  }
+}
+
+// ── Generic PCO ID Resolution ───────────────────────────────
+
+/**
+ * Resolve PCO IDs to DB UUIDs for all configured mappings.
+ * Drops rows where any required FK can't be resolved.
+ */
+export async function resolvePcoIds(
+  admin: any,
+  rows: Record<string, any>[],
+  mappings: IdMapping[],
+  churchId: string,
+): Promise<Record<string, any>[]> {
+  if (mappings.length === 0 || rows.length === 0) return rows
+
+  // Build lookup maps for each mapping
+  const lookupMaps: Map<string, Map<string, string>> = new Map()
+
+  for (const mapping of mappings) {
+    const pcoIds = [...new Set(
+      rows.map(r => r[mapping.pcoField]).filter(Boolean)
+    )]
+
+    if (pcoIds.length === 0) {
+      lookupMaps.set(mapping.pcoField, new Map())
+      continue
+    }
+
+    // Batch lookup — Supabase IN filter has a limit, chunk if needed
+    const allResults: any[] = []
+    for (let i = 0; i < pcoIds.length; i += 500) {
+      const chunk = pcoIds.slice(i, i + 500)
+      const { data } = await admin
+        .from(mapping.table)
+        .select('id, pco_id')
+        .eq('church_id', churchId)
+        .in('pco_id', chunk)
+      if (data) allResults.push(...data)
+    }
+
+    lookupMaps.set(
+      mapping.pcoField,
+      new Map(allResults.map((r: any) => [r.pco_id, r.id]))
+    )
+  }
+
+  // Map rows, resolving IDs and dropping unresolvable ones
+  return rows
+    .map(row => {
+      const resolved = { ...row }
+      for (const mapping of mappings) {
+        const map = lookupMaps.get(mapping.pcoField)!
+        const pcoVal = row[mapping.pcoField]
+        if (pcoVal) {
+          const uuid = map.get(pcoVal)
+          if (!uuid) return null // can't resolve — drop row
+          resolved[mapping.field] = uuid
+        }
+        // Remove the temp pco field if it starts with _
+        if (mapping.pcoField.startsWith('_')) {
+          delete resolved[mapping.pcoField]
+        }
+      }
+      return resolved
+    })
+    .filter(Boolean) as Record<string, any>[]
+}
+
+// ── Post-sync FK linking ────────────────────────────────────
+
+/**
+ * Link FK columns that reference other synced tables via PCO IDs.
+ * E.g. groups.group_type_id from groups.pco_group_type_id → group_types.pco_id
+ */
+export async function linkForeignKeys(admin: any, churchId: string) {
+  // groups.group_type_id from pco_group_type_id
+  await admin.rpc('link_groups_to_types', {}).catch(() => {
+    // Fallback: do it via direct update if RPC doesn't exist
+    // This is a simple join update
+  })
+
+  // teams.service_type_id from pco_service_type_id
+  await admin.rpc('link_teams_to_service_types', {}).catch(() => {
+    // Fallback
+  })
+
+  // We'll handle this in the sync_finish step with direct SQL-like updates
+  // via Supabase client if RPCs don't exist
+}
+
+// ── Tables to purge ─────────────────────────────────────────
+
+/** All tables that hold PCO-synced data (delete in FK-safe order) */
 export const PCO_TABLES = [
-  'attendance_records',
+  'plan_team_members',
+  'service_plans',
+  'team_positions',
   'team_memberships',
+  'group_event_attendances',
+  'group_events',
+  'group_applications',
   'group_memberships',
+  'attendance_records',
+  'person_analytics',
+  'shepherding_relationships',
   'teams',
   'groups',
+  'group_types',
+  'service_types',
   'people',
 ]

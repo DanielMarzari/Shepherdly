@@ -22,32 +22,20 @@ export async function GET() {
   // Get all people who are leaders (to map users to their people records)
   const { data: leaderPeople } = await supabase
     .from('people')
-    .select('id, name, shepherd_id, pco_id')
+    .select('id, name, pco_id')
     .eq('is_leader', true)
-    .eq('is_active', true)
+    .eq('status', 'active')
 
-  // Get shepherding relationships for flock counts
+  // Get all active shepherding relationships for flock counts + hierarchy
   const { data: relationships } = await supabase
     .from('shepherding_relationships')
-    .select('shepherd_id, person_id')
+    .select('shepherd_id, person_id, context_type')
+    .eq('is_active', true)
 
   // Count flock per shepherd (people.id)
   const flockCounts: Record<string, number> = {}
   relationships?.forEach(r => {
     flockCounts[r.shepherd_id] = (flockCounts[r.shepherd_id] || 0) + 1
-  })
-
-  // Also count via people.shepherd_id for direct assignments
-  const { data: directAssignments } = await supabase
-    .from('people')
-    .select('shepherd_id')
-    .not('shepherd_id', 'is', null)
-    .eq('is_active', true)
-
-  directAssignments?.forEach(a => {
-    if (a.shepherd_id) {
-      flockCounts[a.shepherd_id] = (flockCounts[a.shepherd_id] || 0) + 1
-    }
   })
 
   // Get recent check-in report counts per leader
@@ -63,19 +51,27 @@ export async function GET() {
     }
   })
 
+  // Build supervisor map from shepherding_relationships
+  // A user's supervisor is the shepherd of their people record (manual context preferred)
+  const supervisorOf: Record<string, string> = {} // personId → shepherdPersonId
+  relationships?.forEach(r => {
+    // Prefer manual assignments for tree hierarchy
+    if (!supervisorOf[r.person_id] || r.context_type === 'manual') {
+      supervisorOf[r.person_id] = r.shepherd_id
+    }
+  })
+
   // Build tree nodes from users + their people records
-  // Match users to leader people records by email or name
   const nodes = users?.map(u => {
-    // Try to find the user's people record (leader)
     const personRecord = leaderPeople?.find(p =>
       p.name?.toLowerCase() === u.name?.toLowerCase()
     )
     const personId = personRecord?.id
-    const supervisorPersonId = personRecord?.shepherd_id || null
 
-    // Find which user is the supervisor (map shepherd person back to user)
+    // Find supervisor via shepherding_relationships
     let supervisorUserId: string | null = null
-    if (supervisorPersonId) {
+    if (personId && supervisorOf[personId]) {
+      const supervisorPersonId = supervisorOf[personId]
       const supervisorPerson = leaderPeople?.find(p => p.id === supervisorPersonId)
       if (supervisorPerson) {
         const supervisorUser = users?.find(su =>

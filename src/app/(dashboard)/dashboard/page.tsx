@@ -17,7 +17,7 @@ export default async function DashboardPage() {
     .from('people')
     .select('id')
     .eq('is_leader', true)
-    .eq('is_active', true)
+    .eq('status', 'active')
     .ilike('name', appUser?.name || '')
     .limit(1)
     .single()
@@ -26,8 +26,9 @@ export default async function DashboardPage() {
   let checkinCount = 0
 
   if (myPerson) {
+    // Count flock via shepherding_relationships
     const { count } = await supabase
-      .from('people')
+      .from('shepherding_relationships')
       .select('*', { count: 'exact', head: true })
       .eq('shepherd_id', myPerson.id)
       .eq('is_active', true)

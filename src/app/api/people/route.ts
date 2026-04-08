@@ -21,9 +21,14 @@ export async function GET(request: NextRequest) {
 
   let query = supabase
     .from('people')
-    .select('*, groups:group_memberships(group_id, role, groups(id, name)), teams:team_memberships(team_id, role, teams(id, name))')
+    .select(`
+      *,
+      analytics:person_analytics(engagement_score, attendance_count_90d, last_attended_at, total_groups, total_teams, group_attendance_rate),
+      groups:group_memberships(group_id, role, groups(id, name)),
+      teams:team_memberships(team_id, role, teams(id, name))
+    `)
     .eq('church_id', appUser.church_id!)
-    .eq('is_active', true)
+    .eq('status', 'active')
 
   if (!showAll) {
     // Find current user's people record
@@ -37,20 +42,31 @@ export async function GET(request: NextRequest) {
       .single()
 
     if (myPerson) {
-      query = query.eq('shepherd_id', myPerson.id)
+      // Get person IDs this user shepherds
+      const { data: relationships } = await supabase
+        .from('shepherding_relationships')
+        .select('person_id')
+        .eq('shepherd_id', myPerson.id)
+        .eq('is_active', true)
+
+      const personIds = relationships?.map(r => r.person_id) || []
+      if (personIds.length === 0) {
+        return NextResponse.json({ people: [], myPersonId: myPerson.id })
+      }
+      query = query.in('id', personIds)
     } else {
       return NextResponse.json({ people: [], myPersonId: null })
     }
   }
 
   if (search) {
-    query = query.or(`name.ilike.%${search}%,email.ilike.%${search}%`)
+    query = query.ilike('name', `%${search}%`)
   }
 
   if (sort === 'engagement') {
-    query = query.order('engagement_score', { ascending: false, nullsFirst: false })
+    query = query.order('name') // sort client-side from analytics join
   } else if (sort === 'attendance') {
-    query = query.order('last_attended_at', { ascending: false, nullsFirst: false })
+    query = query.order('name')
   } else {
     query = query.order('name')
   }
@@ -58,5 +74,21 @@ export async function GET(request: NextRequest) {
   const { data: people, error } = await query.limit(200)
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
 
-  return NextResponse.json({ people: people || [] })
+  // Client-side sort for analytics-based sorts
+  let sorted = people || []
+  if (sort === 'engagement') {
+    sorted = sorted.sort((a: any, b: any) => {
+      const aScore = a.analytics?.[0]?.engagement_score ?? -1
+      const bScore = b.analytics?.[0]?.engagement_score ?? -1
+      return bScore - aScore
+    })
+  } else if (sort === 'attendance') {
+    sorted = sorted.sort((a: any, b: any) => {
+      const aDate = a.analytics?.[0]?.last_attended_at || ''
+      const bDate = b.analytics?.[0]?.last_attended_at || ''
+      return bDate.localeCompare(aDate)
+    })
+  }
+
+  return NextResponse.json({ people: sorted })
 }

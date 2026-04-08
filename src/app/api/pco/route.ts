@@ -5,7 +5,10 @@ import { PcoClient, createPcoClient } from '@/lib/pco'
 import {
   SYNC_RESOURCES, SYNC_CATEGORIES, PCO_TABLES,
   getResourceCount, fetchResourcePage,
+  getNestedResourceInfo, fetchNestedPage,
+  resolvePcoIds,
 } from '@/lib/pco-sync'
+import type { NestedCursor } from '@/lib/pco-sync'
 import { NextRequest, NextResponse } from 'next/server'
 
 /** Helper: require super_admin, return admin client + credentials + church */
@@ -122,13 +125,11 @@ export async function POST(request: NextRequest) {
       const encAppSecret = appSecret?.trim() ? encrypt(appSecret.trim()) : undefined
 
       if (credentials) {
-        // Update existing
         const updates: Record<string, any> = { app_id: encAppId }
         if (encAppSecret) updates.app_secret = encAppSecret
         const { error } = await admin.from('planning_center_credentials').update(updates).eq('id', credentials.id)
         if (error) return NextResponse.json({ error: error.message }, { status: 500 })
       } else {
-        // Create new
         const { error } = await admin.from('planning_center_credentials').insert({
           user_id: user.id,
           app_id: encAppId,
@@ -167,7 +168,8 @@ export async function POST(request: NextRequest) {
         dbCount: number
         toSync: number
         updatedSince: string | null
-        isNested?: boolean
+        isNested: boolean
+        cursor?: NestedCursor
       }> = {}
 
       for (const res of SYNC_RESOURCES) {
@@ -178,11 +180,21 @@ export async function POST(request: NextRequest) {
             .select('*', { count: 'exact', head: true })
             .eq('church_id', churchId!)
           dbCount = count || 0
-        } catch { /* table might not exist */ }
+        } catch { /* table might not exist yet */ }
 
-        {
+        if (res.isNested) {
+          // Nested resources: get parent info for cursor
+          const { totalCount, cursor } = await getNestedResourceInfo(client, res, admin, churchId!)
+          resourceInfo[res.key] = {
+            pcoCount: totalCount,
+            dbCount,
+            toSync: totalCount,
+            updatedSince: null,
+            isNested: true,
+            cursor,
+          }
+        } else {
           const pcoCount = await getResourceCount(client, res)
-
           let toSync: number
           let updatedSince: string | null = null
 
@@ -218,7 +230,7 @@ export async function POST(request: NextRequest) {
 
     // ── Sync one page ──────────────────────────────────────────
     if (body.action === 'sync_page') {
-      const { resourceKey, offset = 0, syncLogId, updatedSince } = body
+      const { resourceKey, offset = 0, syncLogId, updatedSince, cursor } = body
       const resource = SYNC_RESOURCES.find(r => r.key === resourceKey)
       if (!resource) return NextResponse.json({ error: 'Invalid resource' }, { status: 400 })
       if (!credentials?.app_id || !credentials?.app_secret) {
@@ -227,45 +239,64 @@ export async function POST(request: NextRequest) {
 
       const client = createPcoClient(credentials.app_id, credentials.app_secret)
 
-      // ── Replace strategy (memberships) ───────────────────────
-      if (resource.syncStrategy === 'replace' && offset === 0) {
+      // ── Replace strategy: delete on first page ───────────────
+      if (resource.syncStrategy === 'replace' && offset === 0 && !cursor) {
         await admin.from(resource.table).delete().eq('church_id', churchId!)
       }
 
-      // ── Flat resources (offset-based) ────────────────────────
-      const { rows, hasMore, totalCount } = await fetchResourcePage(
-        client, resource, offset, 100, updatedSince,
-      )
+      let rows: Record<string, any>[]
+      let hasMore: boolean
+      let totalCount: number
+      let nextOffset: number | null = null
+      let nextCursor: NestedCursor | null = null
+
+      if (resource.isNested && cursor) {
+        // ── Nested pagination ────────────────────────────────────
+        const result = await fetchNestedPage(client, resource, cursor, 100)
+        rows = result.rows
+        hasMore = result.hasMore
+        nextCursor = result.nextCursor
+        totalCount = result.upsertedEstimate
+      } else {
+        // ── Flat pagination ──────────────────────────────────────
+        const result = await fetchResourcePage(client, resource, offset, 100, updatedSince)
+        rows = result.rows
+        hasMore = result.hasMore
+        totalCount = result.totalCount
+        nextOffset = hasMore ? offset + 100 : null
+      }
 
       let upserted = 0
       if (rows.length > 0) {
-        // Resolve PCO IDs to UUIDs for membership tables
+        // Resolve PCO IDs to UUIDs if mappings exist
         let resolvedRows = rows
-        if (resource.key === 'group_memberships') {
-          resolvedRows = await resolveGroupMembershipIds(admin, rows, churchId!)
+        if (resource.idMappings && resource.idMappings.length > 0) {
+          resolvedRows = await resolvePcoIds(admin, rows, resource.idMappings, churchId!)
         }
 
         // Add church_id to all rows
         const rowsWithChurch = resolvedRows.map(r => ({ ...r, church_id: churchId }))
 
-        if (resource.syncStrategy === 'replace') {
-          const { error: insertErr } = await admin.from(resource.table).insert(rowsWithChurch)
-          if (insertErr) {
-            return NextResponse.json({
-              error: `${resource.label} insert failed: ${insertErr.message}`,
-            }, { status: 500 })
+        if (rowsWithChurch.length > 0) {
+          if (resource.syncStrategy === 'replace') {
+            const { error: insertErr } = await admin.from(resource.table).insert(rowsWithChurch)
+            if (insertErr) {
+              return NextResponse.json({
+                error: `${resource.label} insert failed: ${insertErr.message}`,
+              }, { status: 500 })
+            }
+          } else {
+            const { error: upsertErr } = await admin
+              .from(resource.table)
+              .upsert(rowsWithChurch, { onConflict: resource.onConflict })
+            if (upsertErr) {
+              return NextResponse.json({
+                error: `${resource.label} upsert failed: ${upsertErr.message}`,
+              }, { status: 500 })
+            }
           }
-        } else {
-          const { error: upsertErr } = await admin
-            .from(resource.table)
-            .upsert(rowsWithChurch, { onConflict: resource.onConflict })
-          if (upsertErr) {
-            return NextResponse.json({
-              error: `${resource.label} upsert failed: ${upsertErr.message}`,
-            }, { status: 500 })
-          }
+          upserted = rowsWithChurch.length
         }
-        upserted = rows.length
       }
 
       if (syncLogId && upserted > 0) {
@@ -273,7 +304,11 @@ export async function POST(request: NextRequest) {
       }
 
       return NextResponse.json({
-        upserted, hasMore, nextOffset: hasMore ? offset + 100 : null, totalCount,
+        upserted,
+        hasMore,
+        nextOffset,
+        nextCursor,
+        totalCount,
       })
     }
 
@@ -293,15 +328,18 @@ export async function POST(request: NextRequest) {
           last_synced_at: new Date().toISOString(),
         }).eq('id', credentials.id)
 
-        // Post-sync: recalculate attendance counts and engagement scores
+        // Post-sync: link FK columns via PCO IDs
         try {
-          const thirtyDaysAgo = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000)
-            .toISOString().split('T')[0]
-          await admin.rpc('update_attendance_counts', { since_date: thirtyDaysAgo })
-          await admin.rpc('update_engagement_scores')
+          await linkForeignKeys(admin, churchId!)
         } catch (e) {
-          // Non-fatal — scores will be stale until next sync
-          console.error('Post-sync score update failed:', e)
+          console.error('FK linking failed:', e)
+        }
+
+        // Post-sync: refresh person analytics
+        try {
+          await admin.rpc('refresh_person_analytics')
+        } catch (e) {
+          console.error('Post-sync analytics refresh failed:', e)
         }
       }
       return NextResponse.json({ success: true })
@@ -314,7 +352,7 @@ export async function POST(request: NextRequest) {
           await admin.from(table).delete().eq('church_id', churchId!)
         } catch { /* table might not exist */ }
       }
-      // Delete credentials entirely so the page resets to setup state
+      // Delete credentials entirely
       if (credentials) {
         await admin.from('planning_center_credentials').delete().eq('id', credentials.id)
       }
@@ -329,6 +367,8 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: e.message }, { status })
   }
 }
+
+// ── Helpers ─────────────────────────────────────────────────
 
 async function getLastUpdated(admin: any, table: string, churchId: string): Promise<string | null> {
   const { data } = await admin
@@ -353,43 +393,40 @@ function tryDecrypt(value: string | null | undefined): string {
   try { return decrypt(value) } catch { return value }
 }
 
-/** Resolve PCO IDs to DB UUIDs for group membership rows */
-async function resolveGroupMembershipIds(
-  admin: any,
-  rows: Record<string, any>[],
-  churchId: string,
-): Promise<Record<string, any>[]> {
-  // Collect unique PCO IDs
-  const personPcoIds = [...new Set(rows.map(r => r._person_pco_id).filter(Boolean))]
-  const groupPcoIds = [...new Set(rows.map(r => r._group_pco_id).filter(Boolean))]
-
-  // Batch lookup people
-  const { data: people } = await admin
-    .from('people')
+/**
+ * Link FK columns that were stored as PCO IDs during sync.
+ * Uses Supabase client to do batch updates.
+ */
+async function linkForeignKeys(admin: any, churchId: string) {
+  // Link groups.group_type_id from pco_group_type_id → group_types.pco_id
+  const { data: groupTypes } = await admin
+    .from('group_types')
     .select('id, pco_id')
     .eq('church_id', churchId)
-    .in('pco_id', personPcoIds)
 
-  const personMap = new Map((people || []).map((p: any) => [p.pco_id, p.id]))
+  if (groupTypes && groupTypes.length > 0) {
+    for (const gt of groupTypes) {
+      await admin
+        .from('groups')
+        .update({ group_type_id: gt.id })
+        .eq('church_id', churchId)
+        .eq('pco_group_type_id', gt.pco_id)
+    }
+  }
 
-  // Batch lookup groups
-  const { data: groups } = await admin
-    .from('groups')
+  // Link teams.service_type_id from pco_service_type_id → service_types.pco_id
+  const { data: serviceTypes } = await admin
+    .from('service_types')
     .select('id, pco_id')
     .eq('church_id', churchId)
-    .in('pco_id', groupPcoIds)
 
-  const groupMap = new Map((groups || []).map((g: any) => [g.pco_id, g.id]))
-
-  // Map rows, skipping any where we can't resolve IDs
-  return rows
-    .map(r => {
-      const personId = personMap.get(r._person_pco_id)
-      const groupId = groupMap.get(r._group_pco_id)
-      if (!personId || !groupId) return null
-
-      const { _person_pco_id, _group_pco_id, ...rest } = r
-      return { ...rest, person_id: personId, group_id: groupId }
-    })
-    .filter(Boolean) as Record<string, any>[]
+  if (serviceTypes && serviceTypes.length > 0) {
+    for (const st of serviceTypes) {
+      await admin
+        .from('teams')
+        .update({ service_type_id: st.id })
+        .eq('church_id', churchId)
+        .eq('pco_service_type_id', st.pco_id)
+    }
+  }
 }
