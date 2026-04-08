@@ -255,16 +255,17 @@ export default function PcoSyncPanel() {
   }
 
   /**
-   * Compute displayed synced count for a category during active sync.
-   * Shows full system total: completed resources at full count + in-progress resources at partial.
+   * Compute displayed synced/total counts for a category during active sync.
+   * For nested resources (pcoCount unknown = -1), only show what we've synced.
+   * For flat resources, show progress toward known PCO total.
    */
   function getCategorySynced(catResources: ResourceMeta[]): number {
     if (!progress) return 0
     return catResources.reduce((sum, r) => {
       const rp = progress.resources[r.key]
-      if (!rp) return sum + (status?.counts[r.key] || 0) // not in this sync run
-      if (rp.skipped) return sum + rp.pcoCount // fully synced already
-      // For incremental: already-done = pcoCount - toSync, plus what we've synced this run
+      if (!rp) return sum + (status?.counts[r.key] || 0)
+      if (rp.skipped) return sum + Math.max(rp.pcoCount, rp.dbCount)
+      if (rp.pcoCount < 0) return sum + rp.syncedThisRun  // nested: count only what we've done
       return sum + (rp.pcoCount - rp.toSync) + rp.syncedThisRun
     }, 0)
   }
@@ -273,7 +274,9 @@ export default function PcoSyncPanel() {
     if (!progress) return 0
     return catResources.reduce((sum, r) => {
       const rp = progress.resources[r.key]
-      return sum + (rp?.pcoCount || status?.counts[r.key] || 0)
+      if (!rp) return sum + (status?.counts[r.key] || 0)
+      if (rp.pcoCount < 0) return sum + rp.syncedThisRun  // nested: total = synced (grows live)
+      return sum + Math.max(rp.pcoCount, rp.dbCount, 0)
     }, 0)
   }
 

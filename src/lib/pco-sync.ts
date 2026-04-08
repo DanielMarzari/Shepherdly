@@ -54,8 +54,7 @@ export interface NestedCursor {
 export const SYNC_CATEGORIES = [
   { key: 'people', label: 'People' },
   { key: 'groups', label: 'Groups' },
-  { key: 'services', label: 'Services & Teams' },
-  { key: 'checkins', label: 'Attendance' },
+  { key: 'teams', label: 'Teams' },
 ] as const
 
 // ── Resource Definitions ────────────────────────────────────
@@ -223,11 +222,33 @@ export const SYNC_RESOURCES: SyncResource[] = [
     ],
   },
 
-  // ── 8. Service Types ──────────────────────────────────────
+  // ── 8. Attendance / Check-Ins ──────────────────────────────
+  {
+    key: 'attendance',
+    label: 'Check-ins',
+    category: 'groups',
+    table: 'attendance_records',
+    endpoint: '/check-ins/v2/check_ins',
+    supportsUpdatedSince: false,
+    syncStrategy: 'upsert',
+    onConflict: 'pco_event_id',
+    mapRow: (c) => ({
+      pco_event_id: c.id,
+      pco_person_id: c.relationships?.person?.data?.id || null,
+      event_date: c.attributes.created_at?.substring(0, 10) || null,
+      service_type: null,
+      checked_in_at: c.attributes.created_at || null,
+    }),
+    idMappings: [
+      { field: 'person_id', pcoField: 'pco_person_id', table: 'people' },
+    ],
+  },
+
+  // ── 9. Service Types ──────────────────────────────────────
   {
     key: 'service_types',
     label: 'Service Types',
-    category: 'services',
+    category: 'teams',
     table: 'service_types',
     endpoint: '/services/v2/service_types',
     supportsUpdatedSince: false,
@@ -243,7 +264,7 @@ export const SYNC_RESOURCES: SyncResource[] = [
   {
     key: 'teams',
     label: 'Teams',
-    category: 'services',
+    category: 'teams',
     table: 'teams',
     endpoint: '/services/v2/teams',
     supportsUpdatedSince: false,
@@ -264,7 +285,7 @@ export const SYNC_RESOURCES: SyncResource[] = [
   {
     key: 'team_memberships',
     label: 'Team Members',
-    category: 'services',
+    category: 'teams',
     table: 'team_memberships',
     endpoint: '',
     supportsUpdatedSince: false,
@@ -297,7 +318,7 @@ export const SYNC_RESOURCES: SyncResource[] = [
   {
     key: 'team_positions',
     label: 'Team Positions',
-    category: 'services',
+    category: 'teams',
     table: 'team_positions',
     endpoint: '',
     supportsUpdatedSince: false,
@@ -320,7 +341,7 @@ export const SYNC_RESOURCES: SyncResource[] = [
   {
     key: 'service_plans',
     label: 'Service Plans',
-    category: 'services',
+    category: 'teams',
     table: 'service_plans',
     endpoint: '',
     supportsUpdatedSince: false,
@@ -344,7 +365,7 @@ export const SYNC_RESOURCES: SyncResource[] = [
   {
     key: 'plan_team_members',
     label: 'Scheduled Members',
-    category: 'services',
+    category: 'teams',
     table: 'plan_team_members',
     endpoint: '',
     supportsUpdatedSince: false,
@@ -371,27 +392,6 @@ export const SYNC_RESOURCES: SyncResource[] = [
     ],
   },
 
-  // ── 13. Attendance (Check-Ins API) ────────────────────────
-  {
-    key: 'attendance',
-    label: 'Check-ins',
-    category: 'checkins',
-    table: 'attendance_records',
-    endpoint: '/check-ins/v2/check_ins',
-    supportsUpdatedSince: false,
-    syncStrategy: 'upsert',
-    onConflict: 'pco_event_id',
-    mapRow: (c) => ({
-      pco_event_id: c.id,
-      pco_person_id: c.relationships?.person?.data?.id || null,
-      event_date: c.attributes.created_at?.substring(0, 10) || null,
-      service_type: null,
-      checked_in_at: c.attributes.created_at || null,
-    }),
-    idMappings: [
-      { field: 'person_id', pcoField: 'pco_person_id', table: 'people' },
-    ],
-  },
 ]
 
 // ── Flat Resource Helpers ───────────────────────────────────
