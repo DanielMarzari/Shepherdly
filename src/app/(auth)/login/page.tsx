@@ -81,7 +81,7 @@ export default function LoginPage() {
           }}>
           <h2 className="text-xl font-serif mb-1 text-white">Sign in</h2>
           <p className="text-sm sans mb-6" style={{ color: 'rgba(255,255,255,0.55)' }}>
-            Enter your church invite code and email address.
+            Enter your personal invite code and email address.
           </p>
 
           <form onSubmit={handleLogin} className="space-y-4">

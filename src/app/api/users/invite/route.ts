@@ -1,6 +1,12 @@
 import { createAdminClient } from '@/lib/supabase/admin'
 import { createClient } from '@/lib/supabase/server'
+import { randomBytes } from 'crypto'
 import { NextRequest, NextResponse } from 'next/server'
+
+/** Generate a unique 6-char alphanumeric invite code */
+function generateInviteCode(): string {
+  return randomBytes(3).toString('hex').toUpperCase() // e.g. "A3F1B2"
+}
 
 export async function POST(request: NextRequest) {
   const supabase = await createClient()
@@ -14,7 +20,9 @@ export async function POST(request: NextRequest) {
   if (!email || !role) return NextResponse.json({ error: 'Missing fields' }, { status: 400 })
 
   const admin = createAdminClient()
+  const inviteCode = generateInviteCode()
 
+  // Create the auth user (Supabase will send an invite email)
   const { data: invited, error: inviteError } = await admin.auth.admin.inviteUserByEmail(email, {
     redirectTo: `${process.env.NEXT_PUBLIC_APP_URL}/auth/callback`,
     data: { name, role }
@@ -22,15 +30,17 @@ export async function POST(request: NextRequest) {
 
   if (inviteError) return NextResponse.json({ error: inviteError.message }, { status: 400 })
 
+  // Create the app-level user row with a personal invite code
   const { error: profileError } = await admin.from('users').insert({
     user_id: invited.user.id,
     email,
     name,
     role,
     church_id: caller.church_id,
+    invite_code: inviteCode,
   })
 
   if (profileError) return NextResponse.json({ error: profileError.message }, { status: 400 })
 
-  return NextResponse.json({ success: true, user_id: invited.user.id })
+  return NextResponse.json({ success: true, user_id: invited.user.id, invite_code: inviteCode })
 }

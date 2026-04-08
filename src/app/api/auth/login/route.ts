@@ -9,27 +9,17 @@ export async function POST(request: NextRequest) {
 
   const admin = createAdminClient()
 
-  // Look up the church by invite code
-  const { data: church, error } = await admin
-    .from('churches')
-    .select('id, name, invite_code')
+  // Look up user by their personal invite code + email
+  const { data: appUser, error: userError } = await admin
+    .from('users')
+    .select('id, user_id, email, is_active, church_id, invite_code')
+    .eq('email', email.trim().toLowerCase())
     .ilike('invite_code', code.trim().toUpperCase())
     .single()
 
-  if (error || !church) {
-    return NextResponse.json({ error: 'Invalid invite code.' }, { status: 401 })
-  }
-
-  // Look up the user by email in this church
-  const { data: appUser, error: userError } = await admin
-    .from('users')
-    .select('id, user_id, email, is_active, church_id')
-    .eq('email', email.trim().toLowerCase())
-    .eq('church_id', church.id)
-    .single()
-
   if (userError || !appUser) {
-    return NextResponse.json({ error: 'No account found for this email at this church.' }, { status: 401 })
+    console.error('[login] user lookup failed:', userError?.message, userError?.code)
+    return NextResponse.json({ error: 'Invalid code or email.' }, { status: 401 })
   }
 
   if (!appUser.is_active) {
@@ -44,6 +34,7 @@ export async function POST(request: NextRequest) {
   })
 
   if (linkError || !linkData) {
+    console.error('[login] generateLink failed:', linkError?.message)
     return NextResponse.json({ error: 'Failed to create session.' }, { status: 500 })
   }
 
@@ -59,6 +50,7 @@ export async function POST(request: NextRequest) {
   })
 
   if (sessionError) {
+    console.error('[login] verifyOtp failed:', sessionError.message)
     return NextResponse.json({ error: 'Failed to establish session.' }, { status: 500 })
   }
 
