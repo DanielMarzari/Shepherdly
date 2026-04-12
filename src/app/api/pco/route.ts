@@ -299,11 +299,18 @@ export async function POST(request: NextRequest) {
         }
       } else {
         // ── Flat pagination ──────────────────────────────────────
-        const result = await fetchResourcePage(client, resource, offset, 100, updatedSince)
-        rows = result.rows
-        hasMore = result.hasMore
-        totalCount = result.totalCount
-        nextOffset = hasMore ? offset + 100 : null
+        try {
+          const result = await fetchResourcePage(client, resource, offset, 100, updatedSince)
+          rows = result.rows
+          hasMore = result.hasMore
+          totalCount = result.totalCount
+          nextOffset = hasMore ? offset + 100 : null
+        } catch (flatErr: any) {
+          return NextResponse.json({
+            error: `${resource.label} fetch failed: ${flatErr.message}`,
+            upserted: 0, hasMore: false, nextOffset: null, nextCursor: null,
+          }, { status: 500 })
+        }
       }
 
       let upserted = 0

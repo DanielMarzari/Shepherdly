@@ -33,6 +33,7 @@ interface ResourceProgress {
   syncedThisRun: number
   toSync: number
   skipped: boolean
+  error?: string
 }
 
 interface SyncProgress {
@@ -139,8 +140,16 @@ export default function PcoSyncPanel() {
             const pageData = await pageRes.json()
 
             if (!pageRes.ok) {
-              // Non-fatal — table might not exist yet
-              console.warn(`Nested sync failed for ${resourceKey}:`, pageData.error)
+              console.error(`Nested sync error for ${resourceKey}:`, pageData.error)
+              setProgress(p => {
+                if (!p) return p
+                const updated = { ...p.resources }
+                updated[resourceKey] = {
+                  ...updated[resourceKey],
+                  error: pageData.error || `Failed: ${pageRes.status}`,
+                }
+                return { ...p, resources: updated }
+              })
               break
             }
 
@@ -177,8 +186,18 @@ export default function PcoSyncPanel() {
             const pageData = await pageRes.json()
 
             if (!pageRes.ok) {
-              if (resourceKey !== 'people') break // non-fatal
-              throw new Error(pageData.error || `Failed syncing ${resourceKey}`)
+              console.error(`Sync error for ${resourceKey}:`, pageData.error)
+              setProgress(p => {
+                if (!p) return p
+                const updated = { ...p.resources }
+                updated[resourceKey] = {
+                  ...updated[resourceKey],
+                  error: pageData.error || `Failed: ${pageRes.status}`,
+                }
+                return { ...p, resources: updated }
+              })
+              if (resourceKey === 'people') throw new Error(pageData.error || `Failed syncing ${resourceKey}`)
+              break // non-fatal for other resources
             }
 
             resourceSynced += pageData.upserted || 0
@@ -336,6 +355,15 @@ export default function PcoSyncPanel() {
                   <div className="h-full rounded-full transition-all duration-300"
                     style={{ width: `${catPct}%`, background: 'var(--green-600)' }} />
                 </div>
+                {/* Show per-resource errors */}
+                {catResources.map(r => {
+                  const rp = progress.resources[r.key]
+                  return rp?.error ? (
+                    <div key={r.key} className="text-xs sans mt-1" style={{ color: '#991b1b' }}>
+                      ⚠ {r.label}: {rp.error}
+                    </div>
+                  ) : null
+                })}
               </div>
             )
           })}
