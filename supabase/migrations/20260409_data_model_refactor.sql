@@ -312,6 +312,22 @@ WHERE gea.attended = true
 GROUP BY date_trunc('week', ge.starts_at)
 ORDER BY week_start;
 
+-- RPC: get unconnected people type counts (avoids Supabase row limit)
+CREATE OR REPLACE FUNCTION get_unconnected_type_counts(p_church_id uuid)
+RETURNS TABLE(membership_type text, cnt bigint)
+LANGUAGE sql
+SECURITY DEFINER
+STABLE
+AS $$
+  SELECT
+    COALESCE(p.membership_type, 'Unknown') AS membership_type,
+    COUNT(*) AS cnt
+  FROM active_unconnected_people p
+  WHERE p.church_id = p_church_id
+  GROUP BY p.membership_type
+  ORDER BY cnt DESC;
+$$;
+
 -- Context summary: per group/team overview
 CREATE OR REPLACE VIEW context_summary AS
 SELECT

@@ -19,26 +19,34 @@ export async function GET() {
   const admin = createAdminClient()
   const churchId = appUser.church_id!
 
-  // Get all unassigned active people (no shepherd relationship, excluding system accounts)
+  // Get paginated unassigned people for display (not all 15k+)
   const { data: people } = await admin
     .from('active_unconnected_people')
     .select('*')
     .eq('church_id', churchId)
+    .limit(200)
 
-  // Stats (admin only)
+  // Stats (admin only) — use DB aggregation, not client-side counting
   let stats = null
   if (appUser.role === 'super_admin') {
-    const { data: coverage } = await admin
-      .from('care_coverage_summary')
-      .select('*')
-      .limit(1)
-      .single()
+    const [{ data: coverage }, { data: typeBreakdown }] = await Promise.all([
+      admin.from('care_coverage_summary').select('*').limit(1).single(),
+      // Get type counts directly from DB to avoid Supabase row limits
+      admin.rpc('get_unconnected_type_counts', { p_church_id: churchId }),
+    ])
 
-    // Breakdown by membership type
-    const typeCounts: Record<string, number> = {}
-    for (const p of people || []) {
-      const t = p.membership_type || 'Unknown'
-      typeCounts[t] = (typeCounts[t] || 0) + 1
+    // Fallback: if RPC doesn't exist, compute from what we have
+    let typeCounts: Record<string, number> = {}
+    if (typeBreakdown && Array.isArray(typeBreakdown)) {
+      for (const row of typeBreakdown) {
+        typeCounts[row.membership_type || 'Unknown'] = row.cnt
+      }
+    } else {
+      // Fallback — count from limited data (won't be complete but won't crash)
+      for (const p of people || []) {
+        const t = p.membership_type || 'Unknown'
+        typeCounts[t] = (typeCounts[t] || 0) + 1
+      }
     }
 
     stats = {

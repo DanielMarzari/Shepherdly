@@ -399,7 +399,7 @@ export const SYNC_RESOURCES: SyncResource[] = [
 
 // ── Flat Resource Helpers ───────────────────────────────────
 
-/** Get total count for a flat resource from PCO */
+/** Get total count for a flat resource from PCO. Returns -1 on error (never 0 on failure). */
 export async function getResourceCount(
   client: PcoClient,
   resource: SyncResource,
@@ -415,7 +415,7 @@ export async function getResourceCount(
     const result = await client.get(resource.endpoint, params)
     return result.meta?.total_count || 0
   } catch {
-    return 0
+    return -1  // signal error — don't skip this resource
   }
 }
 

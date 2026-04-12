@@ -198,17 +198,21 @@ export async function POST(request: NextRequest) {
           let toSync: number
           let updatedSince: string | null = null
 
-          if (res.supportsUpdatedSince) {
+          if (pcoCount < 0) {
+            // Count failed — always attempt sync anyway
+            toSync = -1
+          } else if (res.supportsUpdatedSince) {
             updatedSince = await getLastUpdated(admin, res.table, churchId!)
             toSync = updatedSince
               ? await getResourceCount(client, res, updatedSince)
               : pcoCount
+            if (toSync < 0) toSync = pcoCount  // fallback if updated count fails
           } else {
             toSync = pcoCount
           }
 
           resourceInfo[res.key] = {
-            pcoCount, dbCount, toSync, updatedSince, isNested: false,
+            pcoCount: Math.max(pcoCount, 0), dbCount, toSync, updatedSince, isNested: false,
           }
         }
       }
