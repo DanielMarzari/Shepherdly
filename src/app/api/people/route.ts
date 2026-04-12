@@ -29,6 +29,7 @@ export async function GET(request: NextRequest) {
     `)
     .eq('church_id', appUser.church_id!)
     .eq('status', 'active')
+    .not('name', 'like', '\\_%')
 
   if (!showAll) {
     // Find current user's people record

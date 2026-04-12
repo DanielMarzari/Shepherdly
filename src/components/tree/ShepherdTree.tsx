@@ -1,18 +1,16 @@
 'use client'
 
 import { useEffect, useRef, useState, useCallback } from 'react'
-import { ROLE_LABELS, ROLE_COLORS } from '@/types'
-import type { UserRole } from '@/types'
 
 interface TreeNode {
   id: string
   name: string
-  email: string
-  role: UserRole
+  role: 'shepherd' | 'member'
   supervisorId: string | null
   flockCount: number
   lastCheckin: string | null
   isCurrentUser: boolean
+  contextLabel: string | null
 }
 
 interface LayoutNode extends TreeNode {
@@ -302,10 +300,11 @@ export default function ShepherdTree() {
 
             {/* Nodes */}
             {nodes.map(node => {
-              const color = ROLE_COLORS[node.role] || '#6b4c2a'
+              const isShepherd = node.role === 'shepherd'
+              const color = isShepherd ? '#4a7c59' : '#6b7280'
               const health = healthColor(node)
               const isSelected = selected?.id === node.id
-              const initials = (node.name || node.email)
+              const initials = node.name
                 .split(' ').map((p: string) => p[0]).join('').slice(0, 2).toUpperCase()
 
               return (
@@ -342,8 +341,8 @@ export default function ShepherdTree() {
                   <rect x={0} y={0} width={4} height={NODE_H} rx={2}
                     fill={color} style={{ clipPath: 'inset(0 0 0 0 round 10px 0 0 10px)' }} />
 
-                  {/* Health dot */}
-                  <circle cx={NODE_W - 10} cy={10} r={4} fill={health} />
+                  {/* Health dot — only for shepherds */}
+                  {isShepherd && <circle cx={NODE_W - 10} cy={10} r={4} fill={health} />}
 
                   {/* Avatar circle */}
                   <circle cx={28} cy={NODE_H / 2} r={18}
@@ -356,26 +355,34 @@ export default function ShepherdTree() {
                   </text>
 
                   {/* Name */}
-                  <text x={52} y={NODE_H / 2 - 9}
+                  <text x={52} y={isShepherd ? NODE_H / 2 - 9 : NODE_H / 2 - 4}
                     fontSize={12} fontWeight="600" fontFamily="Georgia, serif"
                     fill={node.isCurrentUser ? 'white' : 'var(--foreground)'}
                     style={{ maxWidth: NODE_W - 60 }}>
-                    {(node.name || node.email).slice(0, 18)}{(node.name || node.email).length > 18 ? '…' : ''}
+                    {node.name.slice(0, 18)}{node.name.length > 18 ? '…' : ''}
                   </text>
 
-                  {/* Role */}
-                  <text x={52} y={NODE_H / 2 + 6}
-                    fontSize={10} fontFamily="system-ui"
-                    fill={node.isCurrentUser ? 'rgba(255,255,255,0.75)' : 'var(--muted-foreground)'}>
-                    {ROLE_LABELS[node.role]}
-                  </text>
-
-                  {/* Flock count */}
-                  <text x={52} y={NODE_H / 2 + 19}
-                    fontSize={9} fontFamily="system-ui"
-                    fill={node.isCurrentUser ? 'rgba(255,255,255,0.6)' : 'var(--muted-foreground)'}>
-                    🐑 {node.flockCount} · {checkinLabel(node)}
-                  </text>
+                  {/* Context label for shepherds, role for members */}
+                  {isShepherd ? (
+                    <>
+                      <text x={52} y={NODE_H / 2 + 6}
+                        fontSize={10} fontFamily="system-ui"
+                        fill={node.isCurrentUser ? 'rgba(255,255,255,0.75)' : 'var(--muted-foreground)'}>
+                        {node.contextLabel ? node.contextLabel.slice(0, 22) : 'Shepherd'}
+                      </text>
+                      <text x={52} y={NODE_H / 2 + 19}
+                        fontSize={9} fontFamily="system-ui"
+                        fill={node.isCurrentUser ? 'rgba(255,255,255,0.6)' : 'var(--muted-foreground)'}>
+                        {node.flockCount} in flock · {checkinLabel(node)}
+                      </text>
+                    </>
+                  ) : (
+                    <text x={52} y={NODE_H / 2 + 9}
+                      fontSize={10} fontFamily="system-ui"
+                      fill={node.isCurrentUser ? 'rgba(255,255,255,0.75)' : 'var(--muted-foreground)'}>
+                      Member
+                    </text>
+                  )}
                 </g>
               )
             })}
@@ -383,81 +390,90 @@ export default function ShepherdTree() {
         </svg>
 
         {/* Detail panel */}
-        {selected && (
-          <div className="absolute right-4 top-4 w-72 bg-white rounded-2xl shadow-xl border p-5"
-            style={{ borderColor: 'var(--border)' }}>
-            <div className="flex items-start justify-between mb-4">
-              <div className="flex items-center gap-3">
-                <div className="w-11 h-11 rounded-full flex items-center justify-center text-sm font-semibold sans"
-                  style={{ background: ROLE_COLORS[selected.role] + '20', color: ROLE_COLORS[selected.role] }}>
-                  {(selected.name || selected.email).split(' ').map((p: string) => p[0]).join('').slice(0, 2).toUpperCase()}
-                </div>
-                <div>
-                  <div className="font-serif text-base" style={{ color: 'var(--primary)' }}>
-                    {selected.name || 'No name'}
+        {selected && (() => {
+          const isShepherd = selected.role === 'shepherd'
+          const detailColor = isShepherd ? '#4a7c59' : '#6b7280'
+          const initials = selected.name.split(' ').map((p: string) => p[0]).join('').slice(0, 2).toUpperCase()
+          return (
+            <div className="absolute right-4 top-4 w-72 bg-white rounded-2xl shadow-xl border p-5"
+              style={{ borderColor: 'var(--border)' }}>
+              <div className="flex items-start justify-between mb-4">
+                <div className="flex items-center gap-3">
+                  <div className="w-11 h-11 rounded-full flex items-center justify-center text-sm font-semibold sans"
+                    style={{ background: detailColor + '20', color: detailColor }}>
+                    {initials}
                   </div>
-                  <div className="text-xs sans" style={{ color: 'var(--muted-foreground)' }}>
-                    {selected.email}
+                  <div>
+                    <div className="font-serif text-base" style={{ color: 'var(--primary)' }}>
+                      {selected.name}
+                    </div>
+                    <div className="text-xs sans" style={{ color: 'var(--muted-foreground)' }}>
+                      {selected.contextLabel || (isShepherd ? 'Shepherd' : 'Member')}
+                    </div>
                   </div>
                 </div>
+                <button onClick={() => setSelected(null)}
+                  className="text-lg leading-none" style={{ color: 'var(--muted-foreground)' }}>×</button>
               </div>
-              <button onClick={() => setSelected(null)}
-                className="text-lg leading-none" style={{ color: 'var(--muted-foreground)' }}>×</button>
-            </div>
 
-            {/* Role badge */}
-            <span className="inline-block text-xs sans px-2.5 py-1 rounded-full font-medium mb-4"
-              style={{ background: ROLE_COLORS[selected.role] + '15', color: ROLE_COLORS[selected.role] }}>
-              {ROLE_LABELS[selected.role]}
-            </span>
+              {/* Role badge */}
+              <span className="inline-block text-xs sans px-2.5 py-1 rounded-full font-medium mb-4"
+                style={{ background: detailColor + '15', color: detailColor }}>
+                {isShepherd ? 'Shepherd' : 'Member'}
+              </span>
 
-            {/* Stats */}
-            <div className="grid grid-cols-2 gap-3 mb-4">
-              <div className="rounded-xl p-3 text-center" style={{ background: 'var(--muted)' }}>
-                <div className="text-2xl font-serif" style={{ color: 'var(--primary)' }}>{selected.flockCount}</div>
-                <div className="text-xs sans mt-0.5" style={{ color: 'var(--muted-foreground)' }}>In Flock</div>
-              </div>
-              <div className="rounded-xl p-3 text-center" style={{ background: 'var(--muted)' }}>
-                <div className="text-sm font-serif" style={{ color: healthColor(selected) }}>{checkinLabel(selected)}</div>
-                <div className="text-xs sans mt-0.5" style={{ color: 'var(--muted-foreground)' }}>Check-ins (30d)</div>
-              </div>
-            </div>
+              {isShepherd && (
+                <>
+                  {/* Stats */}
+                  <div className="grid grid-cols-2 gap-3 mb-4">
+                    <div className="rounded-xl p-3 text-center" style={{ background: 'var(--muted)' }}>
+                      <div className="text-2xl font-serif" style={{ color: 'var(--primary)' }}>{selected.flockCount}</div>
+                      <div className="text-xs sans mt-0.5" style={{ color: 'var(--muted-foreground)' }}>In Flock</div>
+                    </div>
+                    <div className="rounded-xl p-3 text-center" style={{ background: 'var(--muted)' }}>
+                      <div className="text-sm font-serif" style={{ color: healthColor(selected) }}>{checkinLabel(selected)}</div>
+                      <div className="text-xs sans mt-0.5" style={{ color: 'var(--muted-foreground)' }}>Last Check-in</div>
+                    </div>
+                  </div>
 
-            {/* Health indicator */}
-            <div className="rounded-xl p-3 mb-4" style={{ background: 'var(--muted)' }}>
-              <div className="flex items-center justify-between mb-1.5">
-                <span className="text-xs sans font-medium" style={{ color: 'var(--foreground)' }}>Flock Health</span>
-                <span className="text-xs sans" style={{ color: healthColor(selected) }}>
-                  {selected.flockCount === 0 ? 'No flock assigned' :
-                    !selected.lastCheckin ? 'No check-ins' :
-                    (Date.now() - new Date(selected.lastCheckin).getTime()) / 86400000 <= 7 ? 'Healthy' :
-                    (Date.now() - new Date(selected.lastCheckin).getTime()) / 86400000 <= 30 ? 'Needs attention' : 'At risk'}
-                </span>
-              </div>
-              <div className="h-2 rounded-full overflow-hidden" style={{ background: 'var(--border)' }}>
-                <div className="h-full rounded-full transition-all"
-                  style={{
-                    width: selected.flockCount === 0 || !selected.lastCheckin ? '0%' :
-                      `${Math.max(0, Math.min(100, 100 - ((Date.now() - new Date(selected.lastCheckin).getTime()) / 86400000 / 30 * 100)))}%`,
-                    background: healthColor(selected)
-                  }} />
-              </div>
-            </div>
+                  {/* Health indicator */}
+                  <div className="rounded-xl p-3 mb-4" style={{ background: 'var(--muted)' }}>
+                    <div className="flex items-center justify-between mb-1.5">
+                      <span className="text-xs sans font-medium" style={{ color: 'var(--foreground)' }}>Flock Health</span>
+                      <span className="text-xs sans" style={{ color: healthColor(selected) }}>
+                        {selected.flockCount === 0 ? 'No flock assigned' :
+                          !selected.lastCheckin ? 'No check-ins' :
+                          (Date.now() - new Date(selected.lastCheckin).getTime()) / 86400000 <= 7 ? 'Healthy' :
+                          (Date.now() - new Date(selected.lastCheckin).getTime()) / 86400000 <= 30 ? 'Needs attention' : 'At risk'}
+                      </span>
+                    </div>
+                    <div className="h-2 rounded-full overflow-hidden" style={{ background: 'var(--border)' }}>
+                      <div className="h-full rounded-full transition-all"
+                        style={{
+                          width: selected.flockCount === 0 || !selected.lastCheckin ? '0%' :
+                            `${Math.max(0, Math.min(100, 100 - ((Date.now() - new Date(selected.lastCheckin).getTime()) / 86400000 / 30 * 100)))}%`,
+                          background: healthColor(selected)
+                        }} />
+                    </div>
+                  </div>
 
-            <div className="flex gap-2">
-              <a href={`/checkins?shepherd=${selected.id}`}
-                className="flex-1 text-center text-xs sans py-2 rounded-lg font-medium"
-                style={{ background: 'var(--primary)', color: 'white' }}>
-                View Check-ins
-              </a>
-              <a href={`/people?shepherd=${selected.id}`}
-                className="flex-1 text-center text-xs sans py-2 rounded-lg font-medium border"
-                style={{ borderColor: 'var(--border)', color: 'var(--foreground)' }}>
-                View Flock
-              </a>
+                  <div className="flex gap-2">
+                    <a href={`/checkins?shepherd=${selected.id}`}
+                      className="flex-1 text-center text-xs sans py-2 rounded-lg font-medium"
+                      style={{ background: 'var(--primary)', color: 'white' }}>
+                      View Check-ins
+                    </a>
+                    <a href={`/people?shepherd=${selected.id}`}
+                      className="flex-1 text-center text-xs sans py-2 rounded-lg font-medium border"
+                      style={{ borderColor: 'var(--border)', color: 'var(--foreground)' }}>
+                      View Flock
+                    </a>
+                  </div>
+                </>
+              )}
             </div>
-          </div>
-        )}
+          )
+        })()}
       </div>
     </div>
   )

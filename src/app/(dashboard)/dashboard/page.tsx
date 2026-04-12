@@ -174,7 +174,7 @@ export default async function DashboardPage() {
                   <span className="text-xs sans ml-auto" style={{ color: 'var(--foreground-muted)' }}>No shepherd assigned</span>
                 </div>
               ))}
-              <a href="/people?all=true" className="block text-center text-xs font-medium sans mt-2 py-1" style={{ color: 'var(--primary)' }}>
+              <a href="/unassigned" className="block text-center text-xs font-medium sans mt-2 py-1" style={{ color: 'var(--primary)' }}>
                 View all unassigned &rarr;
               </a>
             </div>

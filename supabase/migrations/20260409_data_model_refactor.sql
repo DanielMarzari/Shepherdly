@@ -259,10 +259,10 @@ CREATE INDEX IF NOT EXISTS idx_teams_service_type ON teams(service_type_id);
 -- Care coverage: how many active people have at least one shepherd?
 CREATE OR REPLACE VIEW care_coverage_summary AS
 SELECT
-  COUNT(*) FILTER (WHERE p.status = 'active') AS total_active_people,
-  COUNT(*) FILTER (WHERE p.status = 'active' AND p.membership_type IN ('Member', 'Attender', 'attender', 'member')) AS active_attenders,
-  COUNT(*) FILTER (WHERE p.status = 'active' AND sr.shepherd_id IS NULL) AS unconnected_active,
-  COUNT(*) FILTER (WHERE p.status = 'active' AND sr.shepherd_id IS NOT NULL) AS has_shepherd,
+  COUNT(*) FILTER (WHERE p.status = 'active' AND p.name NOT LIKE '\_%') AS total_active_people,
+  COUNT(*) FILTER (WHERE p.status = 'active' AND p.name NOT LIKE '\_%' AND p.membership_type IN ('Member', 'Attender', 'attender', 'member')) AS active_attenders,
+  COUNT(*) FILTER (WHERE p.status = 'active' AND p.name NOT LIKE '\_%' AND sr.shepherd_id IS NULL) AS unconnected_active,
+  COUNT(*) FILTER (WHERE p.status = 'active' AND p.name NOT LIKE '\_%' AND sr.shepherd_id IS NOT NULL) AS has_shepherd,
   CASE
     WHEN COUNT(*) FILTER (WHERE p.status = 'active') > 0
     THEN ROUND(
@@ -287,6 +287,7 @@ LEFT JOIN shepherding_relationships sr
   ON sr.person_id = p.id AND sr.is_active = true
 WHERE p.status = 'active'
   AND sr.id IS NULL
+  AND p.name NOT LIKE '\_%'
 ORDER BY p.name;
 
 -- Weekly attendance trend (from group_event_attendances)
