@@ -32,6 +32,7 @@ export interface User {
   role: UserRole
   photo_url: string | null
   invite_code: string | null
+  person_id: string | null // FK to people (PCO record)
   is_active: boolean
   created_at: string
   updated_at: string

@@ -298,12 +298,15 @@ export const SYNC_RESOURCES: SyncResource[] = [
     mapRow: (ptpa, included) => {
       const positionId = ptpa.relationships?.team_position?.data?.id
       const position = included?.find((i: any) => i.type === 'TeamPosition' && i.id === positionId)
+      const positionName = position?.attributes?.name || null
+      // Derive role: if position contains "leader" (case-insensitive), mark as leader
+      const isLeader = positionName && /leader/i.test(positionName)
       return {
         pco_id: ptpa.id,
         _pco_person_id: ptpa.relationships?.person?.data?.id || null,
         _pco_team_id: ptpa.attributes?._parentPcoId || null,
-        role: 'member',
-        position: position?.attributes?.name || null,
+        role: isLeader ? 'Leader' : 'member',
+        position: positionName,
         joined_at: ptpa.attributes.created_at || null,
         is_active: true,
       }

@@ -8,19 +8,27 @@ export default async function DashboardPage() {
 
   const { data: appUser } = await supabase
     .from('users')
-    .select('*')
+    .select('*, person_id')
     .eq('user_id', user!.id)
     .single()
 
-  // Find user's people record
-  const { data: myPerson } = await supabase
-    .from('people')
-    .select('id')
-    .eq('is_leader', true)
-    .eq('status', 'active')
-    .ilike('name', appUser?.name || '')
-    .limit(1)
-    .single()
+  // Find user's people record (prefer person_id link, fallback to name)
+  let myPerson: { id: string } | null = null
+  if (appUser?.person_id) {
+    const { data } = await supabase.from('people').select('id').eq('id', appUser.person_id).single()
+    myPerson = data
+  }
+  if (!myPerson && appUser?.name) {
+    const { data } = await supabase
+      .from('people')
+      .select('id')
+      .eq('is_leader', true)
+      .eq('status', 'active')
+      .ilike('name', appUser.name)
+      .limit(1)
+      .single()
+    myPerson = data
+  }
 
   let flockCount = 0
   let checkinCount = 0
@@ -50,7 +58,11 @@ export default async function DashboardPage() {
     .eq('is_urgent', true)
     .neq('status', 'resolved')
 
-  // Unconnected people
+  // Unconnected people — get count + a few for display
+  const { count: unconnectedCount } = await supabase
+    .from('active_unconnected_people')
+    .select('*', { count: 'exact', head: true })
+
   const { data: unconnected } = await supabase
     .from('active_unconnected_people')
     .select('*')
@@ -97,7 +109,7 @@ export default async function DashboardPage() {
         <StatCard label="In My Flock" value={flockCount} icon={<FlockIcon />} color="var(--primary)" bgColor="var(--primary-light)" />
         <StatCard label="Check-ins (30 days)" value={checkinCount} icon={<CheckIcon />} color="var(--success)" bgColor="var(--green-100)" />
         <StatCard label="Need Follow-up" value={urgentCount ?? 0} icon={<AlertIcon />} color="var(--gold-500)" bgColor="#fef9ee" />
-        <StatCard label="Unassigned" value={unconnected?.length ?? 0} icon={<WarningIcon />} color="var(--danger)" bgColor="var(--danger-light)" />
+        <StatCard label="Unassigned" value={unconnectedCount ?? 0} icon={<WarningIcon />} color="var(--danger)" bgColor="var(--danger-light)" />
       </div>
 
       {/* Charts */}
@@ -126,11 +138,13 @@ export default async function DashboardPage() {
           </div>
           <div className="rounded-xl border p-6" style={{ background: 'var(--card)', borderColor: 'var(--border)', boxShadow: 'var(--card-shadow)' }}>
             <h2 className="font-serif text-lg mb-4" style={{ color: 'var(--foreground)' }}>Quick Stats</h2>
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-3 gap-4">
               <QuickStat label="Total Active" value={coverage.total_active_people || 0} />
               <QuickStat label="Attenders" value={coverage.active_attenders || 0} />
               <QuickStat label="With Shepherd" value={coverage.has_shepherd || 0} />
               <QuickStat label="Coverage" value={`${Math.round(coverage.connection_pct || 0)}%`} />
+              <QuickStat label="Unassigned" value={coverage.unconnected_active || 0} />
+              <QuickStat label="Inactive" value={coverage.total_inactive || 0} />
             </div>
           </div>
         </div>

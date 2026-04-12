@@ -18,6 +18,7 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
   if (body.name !== undefined) updates.name = body.name
   if (body.role !== undefined) updates.role = body.role
   if (body.is_active !== undefined) updates.is_active = body.is_active
+  if (body.person_id !== undefined) updates.person_id = body.person_id
 
   if (Object.keys(updates).length > 0) {
     const { error } = await admin.from('users').update(updates).eq('id', id)

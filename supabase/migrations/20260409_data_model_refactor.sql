@@ -22,6 +22,10 @@ ALTER TABLE shepherding_relationships
   ADD COLUMN IF NOT EXISTS is_active boolean DEFAULT true,
   ADD COLUMN IF NOT EXISTS updated_at timestamptz DEFAULT now();
 
+-- Add person_id FK to users (link Shepherdly account to PCO person record)
+ALTER TABLE users
+  ADD COLUMN IF NOT EXISTS person_id uuid REFERENCES people(id) ON DELETE SET NULL;
+
 -- Add group type FK to groups
 ALTER TABLE groups
   ADD COLUMN IF NOT EXISTS group_type_id uuid,
@@ -256,18 +260,22 @@ CREATE INDEX IF NOT EXISTS idx_teams_service_type ON teams(service_type_id);
 -- STEP 7: Recreate views for new schema
 -- ────────────────────────────────────────────────────────────
 
+-- Helper: "real person" filter — excludes system accounts
+-- System accounts: name starts with '_' or '-', OR membership_type = 'SYSTEM USE - Do Not Delete'
+
 -- Care coverage: how many active people have at least one shepherd?
 CREATE OR REPLACE VIEW care_coverage_summary AS
 SELECT
-  COUNT(*) FILTER (WHERE p.status = 'active' AND LEFT(p.name, 1) != '_') AS total_active_people,
-  COUNT(*) FILTER (WHERE p.status = 'active' AND LEFT(p.name, 1) != '_' AND p.membership_type IN ('Member', 'Attender', 'attender', 'member')) AS active_attenders,
-  COUNT(*) FILTER (WHERE p.status = 'active' AND LEFT(p.name, 1) != '_' AND sr.shepherd_id IS NULL) AS unconnected_active,
-  COUNT(*) FILTER (WHERE p.status = 'active' AND LEFT(p.name, 1) != '_' AND sr.shepherd_id IS NOT NULL) AS has_shepherd,
+  COUNT(*) FILTER (WHERE p.status = 'active' AND LEFT(p.name, 1) NOT IN ('_', '-') AND COALESCE(p.membership_type, '') != 'SYSTEM USE - Do Not Delete') AS total_active_people,
+  COUNT(*) FILTER (WHERE p.status = 'active' AND LEFT(p.name, 1) NOT IN ('_', '-') AND COALESCE(p.membership_type, '') != 'SYSTEM USE - Do Not Delete' AND LOWER(p.membership_type) IN ('member', 'attender')) AS active_attenders,
+  COUNT(*) FILTER (WHERE p.status = 'active' AND LEFT(p.name, 1) NOT IN ('_', '-') AND COALESCE(p.membership_type, '') != 'SYSTEM USE - Do Not Delete' AND sr.shepherd_id IS NULL) AS unconnected_active,
+  COUNT(*) FILTER (WHERE p.status = 'active' AND LEFT(p.name, 1) NOT IN ('_', '-') AND COALESCE(p.membership_type, '') != 'SYSTEM USE - Do Not Delete' AND sr.shepherd_id IS NOT NULL) AS has_shepherd,
+  COUNT(*) FILTER (WHERE p.status = 'inactive' AND LEFT(p.name, 1) NOT IN ('_', '-') AND COALESCE(p.membership_type, '') != 'SYSTEM USE - Do Not Delete') AS total_inactive,
   CASE
-    WHEN COUNT(*) FILTER (WHERE p.status = 'active') > 0
+    WHEN COUNT(*) FILTER (WHERE p.status = 'active' AND LEFT(p.name, 1) NOT IN ('_', '-') AND COALESCE(p.membership_type, '') != 'SYSTEM USE - Do Not Delete') > 0
     THEN ROUND(
-      100.0 * COUNT(*) FILTER (WHERE p.status = 'active' AND sr.shepherd_id IS NOT NULL)
-      / COUNT(*) FILTER (WHERE p.status = 'active'),
+      100.0 * COUNT(*) FILTER (WHERE p.status = 'active' AND LEFT(p.name, 1) NOT IN ('_', '-') AND COALESCE(p.membership_type, '') != 'SYSTEM USE - Do Not Delete' AND sr.shepherd_id IS NOT NULL)
+      / COUNT(*) FILTER (WHERE p.status = 'active' AND LEFT(p.name, 1) NOT IN ('_', '-') AND COALESCE(p.membership_type, '') != 'SYSTEM USE - Do Not Delete'),
       1
     )
     ELSE NULL
@@ -287,7 +295,8 @@ LEFT JOIN shepherding_relationships sr
   ON sr.person_id = p.id AND sr.is_active = true
 WHERE p.status = 'active'
   AND sr.id IS NULL
-  AND LEFT(p.name, 1) != '_'
+  AND LEFT(p.name, 1) NOT IN ('_', '-')
+  AND COALESCE(p.membership_type, '') != 'SYSTEM USE - Do Not Delete'
 ORDER BY p.name;
 
 -- Weekly attendance trend (from group_event_attendances)

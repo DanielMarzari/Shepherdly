@@ -255,10 +255,17 @@ export async function POST(request: NextRequest) {
         // Lazily build cursor on first call (parents are now synced)
         let activeCursor: NestedCursor = cursor
         if (!activeCursor) {
-          const { totalCount: nestedTotal, cursor: newCursor } = await getNestedResourceInfo(
-            client, resource, admin, churchId!
-          )
-          activeCursor = newCursor
+          try {
+            const { totalCount: nestedTotal, cursor: newCursor } = await getNestedResourceInfo(
+              client, resource, admin, churchId!
+            )
+            activeCursor = newCursor
+          } catch (cursorErr: any) {
+            return NextResponse.json({
+              error: `Failed to build cursor for ${resource.label}: ${cursorErr.message}`,
+              upserted: 0, hasMore: false, nextOffset: null, nextCursor: null,
+            }, { status: 500 })
+          }
           if (activeCursor.parents.length === 0) {
             // No parents — nothing to sync
             return NextResponse.json({
@@ -266,11 +273,26 @@ export async function POST(request: NextRequest) {
             })
           }
         }
-        const result = await fetchNestedPage(client, resource, activeCursor, 100)
-        rows = result.rows
-        hasMore = result.hasMore
-        nextCursor = result.nextCursor
-        totalCount = result.upsertedEstimate
+        try {
+          const result = await fetchNestedPage(client, resource, activeCursor, 100)
+          rows = result.rows
+          hasMore = result.hasMore
+          nextCursor = result.nextCursor
+          totalCount = result.upsertedEstimate
+        } catch (fetchErr: any) {
+          // Skip this parent and advance cursor
+          const advancedCursor = activeCursor.parentIdx + 1 < activeCursor.parents.length
+            ? { ...activeCursor, parentIdx: activeCursor.parentIdx + 1, offset: 0 }
+            : null
+          return NextResponse.json({
+            upserted: 0,
+            hasMore: advancedCursor !== null,
+            nextOffset: null,
+            nextCursor: advancedCursor,
+            totalCount: 0,
+            warning: `Skipped parent ${activeCursor.parentIdx}: ${fetchErr.message}`,
+          })
+        }
       } else {
         // ── Flat pagination ──────────────────────────────────────
         const result = await fetchResourcePage(client, resource, offset, 100, updatedSince)

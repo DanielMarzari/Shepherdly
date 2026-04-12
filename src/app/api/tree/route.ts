@@ -9,7 +9,7 @@ export async function GET() {
 
   const { data: currentUser } = await supabase
     .from('users')
-    .select('id, name, role, church_id')
+    .select('id, name, role, church_id, person_id')
     .eq('user_id', user.id)
     .single()
 
@@ -27,7 +27,9 @@ export async function GET() {
     { data: recentReports },
   ] = await Promise.all([
     admin.from('people').select('id, name, pco_id, status')
-      .eq('church_id', churchId!).eq('status', 'active').not('name', 'like', '\\_%'),
+      .eq('church_id', churchId!).eq('status', 'active')
+      .not('name', 'like', '\\_%').not('name', 'like', '-%')
+      .neq('membership_type', 'SYSTEM USE - Do Not Delete'),
     admin.from('group_memberships').select('person_id, group_id, role, is_active')
       .eq('church_id', churchId!).eq('is_active', true),
     admin.from('groups').select('id, name, is_active')
@@ -140,9 +142,12 @@ export async function GET() {
     for (const s of sheepSet) treePersonIds.add(s)
   }
 
-  // Match current user to a person record
+  // Match current user to a person record (prefer person_id link, fallback to name)
   let currentUserPersonId: string | null = null
-  if (currentUser?.name) {
+  if (currentUser?.person_id && personMap.has(currentUser.person_id)) {
+    currentUserPersonId = currentUser.person_id
+    treePersonIds.add(currentUser.person_id)
+  } else if (currentUser?.name) {
     const match = people.find(p => p.name?.toLowerCase() === currentUser.name?.toLowerCase())
     if (match) {
       currentUserPersonId = match.id

@@ -110,7 +110,9 @@ export default function UsersPage() {
                           )}
                         </div>
                         <div className="text-xs sans mt-0.5" style={{ color: 'var(--muted-foreground)' }}>
-                          {u.email}{getSupervisorName(u) && ` · Reports to ${getSupervisorName(u)}`}
+                          {u.email}
+                          {u.person_id && <span style={{ color: 'var(--primary)' }}> · PCO linked</span>}
+                          {!u.person_id && <span style={{ color: '#c17f3e' }}> · No PCO link</span>}
                         </div>
                       </div>
                       <span className="text-xs sans px-2.5 py-1 rounded-full font-medium shrink-0"
@@ -201,10 +203,36 @@ function EditModal({ user, users, onClose, onSuccess }: { user: UserRow; users: 
   const [role, setRole] = useState<UserRole>(user.role)
   const [isActive, setIsActive] = useState(user.is_active)
   const [supervisorId, setSupervisorId] = useState('')
+  const [personId, setPersonId] = useState<string | null>(user.person_id)
+  const [personSearch, setPersonSearch] = useState('')
+  const [personResults, setPersonResults] = useState<{ id: string; name: string; pco_id: string | null }[]>([])
+  const [selectedPersonName, setSelectedPersonName] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
 
   const eligibleSupervisors = users.filter(u => u.id !== user.id && ROLE_ORDER.indexOf(u.role) < ROLE_ORDER.indexOf(role))
+
+  // Load linked person name on mount
+  useEffect(() => {
+    if (user.person_id) {
+      fetch(`/api/people/${user.person_id}`).then(r => r.json()).then(data => {
+        if (data.person?.name) setSelectedPersonName(data.person.name)
+      }).catch(() => {})
+    }
+  }, [user.person_id])
+
+  // Search PCO people
+  useEffect(() => {
+    if (personSearch.length < 2) { setPersonResults([]); return }
+    const timeout = setTimeout(async () => {
+      const res = await fetch(`/api/people?search=${encodeURIComponent(personSearch)}&all=true`)
+      const data = await res.json()
+      setPersonResults((data.people || []).slice(0, 8).map((p: any) => ({
+        id: p.id, name: p.name, pco_id: p.pco_id,
+      })))
+    }, 300)
+    return () => clearTimeout(timeout)
+  }, [personSearch])
 
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -213,7 +241,7 @@ function EditModal({ user, users, onClose, onSuccess }: { user: UserRow; users: 
     const res = await fetch(`/api/users/${user.id}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name: fullName, role, is_active: isActive, /* supervisor_id not yet implemented */ }),
+      body: JSON.stringify({ name: fullName, role, is_active: isActive, person_id: personId }),
     })
     const data = await res.json()
     if (data.error) { setError(data.error); setLoading(false) } else onSuccess()
@@ -238,6 +266,38 @@ function EditModal({ user, users, onClose, onSuccess }: { user: UserRow; users: 
             </select>
           </Field>
         )}
+        <Field label="Linked PCO Record">
+          {personId && selectedPersonName ? (
+            <div className="flex items-center gap-2">
+              <span className="flex-1 px-4 py-2.5 rounded-lg border text-sm sans" style={{ ...inputStyle }}>
+                {selectedPersonName}
+              </span>
+              <button type="button" onClick={() => { setPersonId(null); setSelectedPersonName(''); setPersonSearch('') }}
+                className="text-xs sans px-3 py-2 rounded-lg" style={{ color: 'var(--danger)' }}>
+                Unlink
+              </button>
+            </div>
+          ) : (
+            <div className="relative">
+              <input type="text" value={personSearch} onChange={e => setPersonSearch(e.target.value)}
+                placeholder="Search PCO people..." className={inputClass} style={inputStyle} />
+              {personResults.length > 0 && (
+                <div className="absolute z-10 top-full left-0 right-0 mt-1 bg-white rounded-lg border shadow-lg max-h-48 overflow-y-auto"
+                  style={{ borderColor: 'var(--border)' }}>
+                  {personResults.map(p => (
+                    <button key={p.id} type="button"
+                      onClick={() => { setPersonId(p.id); setSelectedPersonName(p.name); setPersonSearch(''); setPersonResults([]) }}
+                      className="w-full text-left px-4 py-2 text-sm sans hover:bg-gray-50 transition-colors flex items-center justify-between"
+                      style={{ color: 'var(--foreground)' }}>
+                      <span>{p.name}</span>
+                      {p.pco_id && <span className="text-xs" style={{ color: 'var(--muted-foreground)' }}>PCO #{p.pco_id}</span>}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+        </Field>
         <div className="flex items-center gap-3">
           <input type="checkbox" id="active" checked={isActive} onChange={e => setIsActive(e.target.checked)} className="w-4 h-4 rounded" />
           <label htmlFor="active" className="text-sm sans" style={{ color: 'var(--foreground)' }}>Active (can log in)</label>
