@@ -207,6 +207,9 @@ export async function POST(request: NextRequest) {
               ? await getResourceCount(client, res, updatedSince)
               : pcoCount
             if (toSync < 0) toSync = pcoCount  // fallback if updated count fails
+          } else if (res.syncStrategy === 'upsert' && dbCount === pcoCount && pcoCount > 0) {
+            // Already have all records — skip (upsert would be a no-op)
+            toSync = 0
           } else {
             toSync = pcoCount
           }

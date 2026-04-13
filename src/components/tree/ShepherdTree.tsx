@@ -117,6 +117,10 @@ export default function ShepherdTree() {
   const [connecting, setConnecting] = useState<{ shepherdId: string; shepherdName: string } | null>(null)
   const [searchTerm, setSearchTerm] = useState('')
   const [allNodes, setAllNodes] = useState<TreeNode[]>([])
+  const [addingPerson, setAddingPerson] = useState(false)
+  const [addSearch, setAddSearch] = useState('')
+  const [addResults, setAddResults] = useState<{ id: string; name: string; pco_id: string | null }[]>([])
+  const [currentUserRole, setCurrentUserRole] = useState<string | null>(null)
 
   // Pan & zoom state
   const [transform, setTransform] = useState({ x: 0, y: 60, scale: 1 })
@@ -130,6 +134,7 @@ export default function ShepherdTree() {
     if (data.error) { setError(data.error); setLoading(false); return }
 
     setAllNodes(data.nodes || [])
+    setCurrentUserRole(data.currentUserRole || null)
     const laid = buildTree(data.nodes)
     setNodes(laid)
     setEdges(getAllEdges(laid))
@@ -145,6 +150,39 @@ export default function ShepherdTree() {
   }, [])
 
   useEffect(() => { fetchTree() }, [fetchTree])
+
+  // People search for add-person
+  useEffect(() => {
+    if (addSearch.length < 2) { setAddResults([]); return }
+    const t = setTimeout(async () => {
+      const res = await fetch(`/api/people?search=${encodeURIComponent(addSearch)}&all=true`)
+      const data = await res.json()
+      setAddResults((data.people || []).slice(0, 8).map((p: any) => ({
+        id: p.id, name: p.name, pco_id: p.pco_id,
+      })))
+    }, 300)
+    return () => clearTimeout(t)
+  }, [addSearch])
+
+  const addPersonToTree = async (personId: string, shepherdId?: string) => {
+    if (shepherdId) {
+      await fetch(`/api/people/${personId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'add_shepherd', shepherd_id: shepherdId, context_type: 'manual' }),
+      })
+    }
+    // Mark as leader so they show in tree
+    await fetch(`/api/people/${personId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ is_leader: true }),
+    })
+    setAddingPerson(false)
+    setAddSearch('')
+    setAddResults([])
+    fetchTree()
+  }
 
   const assignShepherd = async (personId: string, shepherdId: string) => {
     await fetch(`/api/people/${personId}`, {
@@ -202,7 +240,7 @@ export default function ShepherdTree() {
     const handleWheel = (e: WheelEvent) => {
       e.preventDefault()
       const delta = e.deltaY > 0 ? 0.9 : 1.1
-      setTransform(t => ({ ...t, scale: Math.min(2, Math.max(0.3, t.scale * delta)) }))
+      setTransform(t => ({ ...t, scale: Math.min(3, Math.max(0.05, t.scale * delta)) }))
     }
     el.addEventListener('wheel', handleWheel, { passive: false })
     return () => el.removeEventListener('wheel', handleWheel)
@@ -276,6 +314,14 @@ export default function ShepherdTree() {
               </button>
             ))}
           </div>
+          {/* Add Person (admin/staff) */}
+          {['super_admin', 'staff'].includes(currentUserRole || '') && (
+            <button onClick={() => setAddingPerson(true)}
+              className="text-xs sans px-3 py-1.5 rounded-lg font-medium"
+              style={{ background: 'var(--primary)', color: 'white' }}>
+              + Add Person
+            </button>
+          )}
           {/* Reset */}
           <button onClick={() => setTransform({ x: 0, y: 60, scale: 1 })}
             className="text-xs sans px-3 py-1.5 rounded-lg border"
@@ -401,25 +447,25 @@ export default function ShepherdTree() {
                     {node.name.slice(0, 18)}{node.name.length > 18 ? '…' : ''}
                   </text>
 
-                  {/* Context label for shepherds, role for members */}
+                  {/* Shepherd: flock count + context. Member: context label */}
                   {isShepherd ? (
                     <>
                       <text x={52} y={NODE_H / 2 + 6}
                         fontSize={10} fontFamily="system-ui"
                         fill={node.isCurrentUser ? 'rgba(255,255,255,0.75)' : 'var(--muted-foreground)'}>
-                        {node.contextLabel ? node.contextLabel.slice(0, 22) : 'Shepherd'}
+                        {node.flockCount} in flock
                       </text>
                       <text x={52} y={NODE_H / 2 + 19}
                         fontSize={9} fontFamily="system-ui"
                         fill={node.isCurrentUser ? 'rgba(255,255,255,0.6)' : 'var(--muted-foreground)'}>
-                        {node.flockCount} in flock · {checkinLabel(node)}
+                        {node.contextLabel ? node.contextLabel.slice(0, 28) : 'Shepherd'}
                       </text>
                     </>
                   ) : (
                     <text x={52} y={NODE_H / 2 + 9}
                       fontSize={10} fontFamily="system-ui"
                       fill={node.isCurrentUser ? 'rgba(255,255,255,0.75)' : 'var(--muted-foreground)'}>
-                      Member
+                      {node.contextLabel ? node.contextLabel.slice(0, 22) : 'Member'}
                     </text>
                   )}
                 </g>
@@ -609,6 +655,72 @@ export default function ShepherdTree() {
                 )}
                 {!searchTerm && (
                   <p className="text-xs sans text-center py-4" style={{ color: 'var(--muted-foreground)' }}>Type a name to search</p>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Add person modal */}
+        {addingPerson && (
+          <div className="absolute inset-0 flex items-center justify-center" style={{ background: 'rgba(0,0,0,0.3)' }}>
+            <div className="w-96 bg-white rounded-2xl shadow-xl border p-5" style={{ borderColor: 'var(--border)' }}>
+              <div className="flex items-center justify-between mb-3">
+                <h3 className="font-serif text-base" style={{ color: 'var(--primary)' }}>Add Person to Tree</h3>
+                <button onClick={() => { setAddingPerson(false); setAddSearch(''); setAddResults([]) }}
+                  className="text-lg leading-none" style={{ color: 'var(--muted-foreground)' }}>×</button>
+              </div>
+              <p className="text-xs sans mb-3" style={{ color: 'var(--muted-foreground)' }}>
+                Search for anyone in your congregation. Choose a shepherd to place them under, or add them as a root leader.
+              </p>
+              <input
+                type="text"
+                placeholder="Search by name..."
+                value={addSearch}
+                onChange={e => setAddSearch(e.target.value)}
+                className="w-full px-3 py-2 rounded-lg border text-sm sans mb-3"
+                style={{ borderColor: 'var(--border)', color: 'var(--foreground)' }}
+                autoFocus
+              />
+              <div className="max-h-64 overflow-y-auto space-y-1">
+                {addResults.map(p => {
+                  const alreadyInTree = allNodes.some(n => n.id === p.id)
+                  return (
+                    <div key={p.id} className="flex items-center gap-3 px-3 py-2 rounded-lg" style={{ background: alreadyInTree ? 'var(--muted)' : 'white' }}>
+                      <div className="w-7 h-7 rounded-full flex items-center justify-center text-xs font-medium sans shrink-0"
+                        style={{ background: '#4a7c5918', color: '#4a7c59' }}>
+                        {p.name.split(' ').map((w: string) => w[0]).join('').slice(0, 2).toUpperCase()}
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="text-sm sans font-medium truncate" style={{ color: 'var(--foreground)' }}>{p.name}</div>
+                        {alreadyInTree && <div className="text-xs sans" style={{ color: 'var(--muted-foreground)' }}>Already in tree</div>}
+                      </div>
+                      <div className="flex gap-1 shrink-0">
+                        <button
+                          onClick={() => addPersonToTree(p.id)}
+                          className="text-xs sans px-2 py-1 rounded font-medium"
+                          style={{ background: 'var(--primary)', color: 'white' }}>
+                          As Root
+                        </button>
+                        <select
+                          className="text-xs sans px-1 py-1 rounded border"
+                          style={{ borderColor: 'var(--border)', color: 'var(--foreground)' }}
+                          defaultValue=""
+                          onChange={e => { if (e.target.value) addPersonToTree(p.id, e.target.value) }}>
+                          <option value="" disabled>Under…</option>
+                          {allNodes.filter(n => n.role === 'shepherd').slice(0, 20).map(n => (
+                            <option key={n.id} value={n.id}>{n.name}</option>
+                          ))}
+                        </select>
+                      </div>
+                    </div>
+                  )
+                })}
+                {addSearch.length >= 2 && addResults.length === 0 && (
+                  <p className="text-xs sans text-center py-4" style={{ color: 'var(--muted-foreground)' }}>No matches</p>
+                )}
+                {addSearch.length < 2 && (
+                  <p className="text-xs sans text-center py-4" style={{ color: 'var(--muted-foreground)' }}>Type at least 2 characters to search</p>
                 )}
               </div>
             </div>

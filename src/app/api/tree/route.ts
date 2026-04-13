@@ -77,7 +77,7 @@ export async function GET() {
   for (const [groupId, members] of groupMembers) {
     const group = groupMap.get(groupId)
     for (const m of members) {
-      if (/leader/i.test(m.role) && personMap.has(m.personId)) {
+      if (/leader|co.?leader/i.test(m.role) && personMap.has(m.personId)) {
         leaderPersonIds.add(m.personId)
         if (!shepherdContexts.has(m.personId)) shepherdContexts.set(m.personId, new Set())
         shepherdContexts.get(m.personId)!.add(group?.name || 'Group')
@@ -87,7 +87,7 @@ export async function GET() {
   for (const [teamId, members] of teamMembers) {
     const team = teamMap.get(teamId)
     for (const m of members) {
-      if (/leader/i.test(m.role) && personMap.has(m.personId)) {
+      if (/leader|co.?leader/i.test(m.role) && personMap.has(m.personId)) {
         leaderPersonIds.add(m.personId)
         if (!shepherdContexts.has(m.personId)) shepherdContexts.set(m.personId, new Set())
         shepherdContexts.get(m.personId)!.add(team?.name || 'Team')
@@ -106,8 +106,8 @@ export async function GET() {
 
   // Group leaders → their members
   for (const [, members] of groupMembers) {
-    const leaders = members.filter(m => /leader/i.test(m.role))
-    const nonLeaders = members.filter(m => !/leader/i.test(m.role))
+    const leaders = members.filter(m => /leader|co.?leader/i.test(m.role))
+    const nonLeaders = members.filter(m => !/leader|co.?leader/i.test(m.role))
     for (const leader of leaders) {
       for (const member of nonLeaders) {
         addEdge(leader.personId, member.personId)
@@ -117,8 +117,8 @@ export async function GET() {
 
   // Team leaders → their members
   for (const [, members] of teamMembers) {
-    const leaders = members.filter(m => /leader/i.test(m.role))
-    const nonLeaders = members.filter(m => !/leader/i.test(m.role))
+    const leaders = members.filter(m => /leader|co.?leader/i.test(m.role))
+    const nonLeaders = members.filter(m => !/leader|co.?leader/i.test(m.role))
     for (const leader of leaders) {
       for (const member of nonLeaders) {
         addEdge(leader.personId, member.personId)
