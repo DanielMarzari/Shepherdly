@@ -4,6 +4,7 @@ import { useEffect, useRef, useState, useCallback } from 'react'
 
 interface TreeNode {
   id: string
+  personId?: string   // real DB person ID (for API calls); id may be compound like "uuid::group-xxx"
   name: string
   role: 'shepherd' | 'member' | 'group' | 'team'
   nodeType?: 'person' | 'group' | 'team'
@@ -182,6 +183,9 @@ export default function ShepherdTree() {
     return () => clearTimeout(t)
   }, [addSearch])
 
+  // Get real person ID from a tree node (compound IDs like "uuid::group-xxx" → "uuid")
+  const realId = (node: TreeNode) => node.personId || node.id
+
   const addPersonToTree = async (personId: string, shepherdId?: string) => {
     if (shepherdId) {
       await fetch(`/api/people/${personId}`, {
@@ -202,7 +206,10 @@ export default function ShepherdTree() {
     fetchTree()
   }
 
-  const assignShepherd = async (personId: string, shepherdId: string) => {
+  const assignShepherd = async (personIdOrCompound: string, shepherdIdOrCompound: string) => {
+    // Strip compound IDs (e.g. "uuid::group-xxx") down to real person IDs
+    const personId = personIdOrCompound.split('::')[0]
+    const shepherdId = shepherdIdOrCompound.split('::')[0]
     await fetch(`/api/people/${personId}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
@@ -647,7 +654,7 @@ export default function ShepherdTree() {
                     </div>
                   </div>
                   <button
-                    onClick={() => setConnecting({ shepherdId: selected.id, shepherdName: selected.name })}
+                    onClick={() => setConnecting({ shepherdId: realId(selected), shepherdName: selected.name })}
                     className="w-full text-center text-xs sans py-2 rounded-lg font-medium border"
                     style={{ borderColor: 'var(--border)', color: 'var(--foreground)' }}>
                     Add Members to Flock
@@ -690,13 +697,13 @@ export default function ShepherdTree() {
                   </div>
 
                   <div className="flex gap-2">
-                    <a href={`/checkins?shepherd=${selected.id}`}
+                    <a href={`/checkins?shepherd=${realId(selected)}`}
                       className="flex-1 text-center text-xs sans py-2 rounded-lg font-medium"
                       style={{ background: 'var(--primary)', color: 'white' }}>
                       View Check-ins
                     </a>
                     <button
-                      onClick={() => setConnecting({ shepherdId: selected.id, shepherdName: selected.name })}
+                      onClick={() => setConnecting({ shepherdId: realId(selected), shepherdName: selected.name })}
                       className="flex-1 text-center text-xs sans py-2 rounded-lg font-medium border"
                       style={{ borderColor: 'var(--border)', color: 'var(--foreground)' }}>
                       Add to Flock
@@ -770,7 +777,7 @@ export default function ShepherdTree() {
                     {allNodes
                       .filter(n => {
                         if (!searchTerm) return false
-                        if (n.id === selected.id) return false
+                        if (realId(n) === realId(selected)) return false
                         const matchesSearch = n.name.toLowerCase().includes(searchTerm.toLowerCase())
                         if (connecting.shepherdId) {
                           return matchesSearch
@@ -778,14 +785,16 @@ export default function ShepherdTree() {
                           return matchesSearch && n.role === 'shepherd'
                         }
                       })
+                      // Deduplicate by personId for the search results
+                      .filter((n, i, arr) => arr.findIndex(x => realId(x) === realId(n)) === i)
                       .slice(0, 10)
                       .map(n => (
                         <button key={n.id}
                           onClick={() => {
                             if (connecting.shepherdId) {
-                              assignShepherd(n.id, connecting.shepherdId)
+                              assignShepherd(realId(n), connecting.shepherdId)
                             } else {
-                              assignShepherd(selected.id, n.id)
+                              assignShepherd(realId(selected), realId(n))
                             }
                           }}
                           className="w-full flex items-center gap-3 px-3 py-2 rounded-lg text-left hover:bg-gray-50 transition-colors">
@@ -801,7 +810,7 @@ export default function ShepherdTree() {
                           </div>
                         </button>
                       ))}
-                    {searchTerm && allNodes.filter(n => n.id !== selected.id && n.name.toLowerCase().includes(searchTerm.toLowerCase())).length === 0 && (
+                    {searchTerm && allNodes.filter(n => realId(n) !== realId(selected) && n.name.toLowerCase().includes(searchTerm.toLowerCase())).length === 0 && (
                       <p className="text-xs sans text-center py-4" style={{ color: 'var(--muted-foreground)' }}>No matches found</p>
                     )}
                     {!searchTerm && (

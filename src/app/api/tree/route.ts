@@ -132,8 +132,31 @@ export async function GET() {
   //     ├── Member (directly under group if no leader)
   //     └── Member
 
+  // People can appear in multiple groups/teams — each appearance gets a
+  // unique node ID (personId::contextNodeId) so the tree shows them under
+  // every group/team they belong to. `personId` is preserved for API calls.
   const nodes: any[] = []
-  const treePersonIds = new Set<string>()
+
+  // Helper: create a person node scoped to a group/team context
+  const personNode = (
+    personId: string, contextNodeId: string, role: 'shepherd' | 'member',
+    supervisorId: string, contextLabel: string, flockCount: number,
+  ) => {
+    const person = personMap.get(personId)!
+    return {
+      id: `${personId}::${contextNodeId}`,
+      personId,                          // real DB person ID for API calls
+      name: person.name || 'Unknown',
+      role,
+      nodeType: 'person' as const,
+      supervisorId,
+      flockCount,
+      lastCheckin: lastCheckin[personId] || null,
+      isCurrentUser: false,
+      contextLabel,
+      warning: null,
+    }
+  }
 
   // ── Process Groups ────────────────────────────────────────
   for (const [groupId, members] of groupMembers) {
@@ -145,9 +168,8 @@ export async function GET() {
 
     const groupTypeName = getGroupTypeName(group)
     const contextLabel = groupTypeName ? `${groupTypeName}: ${group.name}` : group.name || 'Group'
-
-    // Create group structural node
     const groupNodeId = `group-${groupId}`
+
     nodes.push({
       id: groupNodeId,
       name: group.name || 'Unnamed Group',
@@ -165,68 +187,22 @@ export async function GET() {
     const nonLeaders = validMembers.filter(m => !/leader|co.?leader/i.test(m.role))
 
     if (leaders.length > 0) {
-      // Leaders hang under the group node; members hang under their leader
       for (const leader of leaders) {
-        const person = personMap.get(leader.personId)!
-        leaderPersonIds.add(leader.personId)
-        addContext(leader.personId, contextLabel)
-        treePersonIds.add(leader.personId)
-
-        const leaderFlock = nonLeaders.length
-        nodes.push({
-          id: leader.personId,
-          name: person.name || 'Unknown',
-          role: 'shepherd',
-          nodeType: 'person',
-          supervisorId: groupNodeId,
-          flockCount: Math.ceil(leaderFlock / leaders.length), // split flock across co-leaders
-          lastCheckin: lastCheckin[leader.personId] || null,
-          isCurrentUser: false,
-          contextLabel,
-          warning: null,
-        })
+        const leaderNodeId = `${leader.personId}::${groupNodeId}`
+        nodes.push(personNode(
+          leader.personId, groupNodeId, 'shepherd', groupNodeId, contextLabel,
+          Math.ceil(nonLeaders.length / leaders.length),
+        ))
       }
-
-      // Non-leaders hang under the first leader (or split among co-leaders)
       for (let i = 0; i < nonLeaders.length; i++) {
         const m = nonLeaders[i]
-        const person = personMap.get(m.personId)!
-        addContext(m.personId, contextLabel)
-        treePersonIds.add(m.personId)
-
         const assignedLeader = leaders[i % leaders.length]
-        nodes.push({
-          id: m.personId,
-          name: person.name || 'Unknown',
-          role: 'member',
-          nodeType: 'person',
-          supervisorId: assignedLeader.personId,
-          flockCount: 0,
-          lastCheckin: null,
-          isCurrentUser: false,
-          contextLabel,
-          warning: null,
-        })
+        const leaderNodeId = `${assignedLeader.personId}::${groupNodeId}`
+        nodes.push(personNode(m.personId, groupNodeId, 'member', leaderNodeId, contextLabel, 0))
       }
     } else {
-      // No leader — members hang directly under the group node
       for (const m of validMembers) {
-        const person = personMap.get(m.personId)!
-        addContext(m.personId, contextLabel)
-        treePersonIds.add(m.personId)
-
-        nodes.push({
-          id: m.personId,
-          name: person.name || 'Unknown',
-          role: 'member',
-          nodeType: 'person',
-          supervisorId: groupNodeId,
-          flockCount: 0,
-          lastCheckin: null,
-          isCurrentUser: false,
-          contextLabel,
-          warning: null,
-        })
+        nodes.push(personNode(m.personId, groupNodeId, 'member', groupNodeId, contextLabel, 0))
       }
     }
   }
@@ -241,9 +217,8 @@ export async function GET() {
 
     const serviceTypeName = getServiceTypeName(team)
     const contextLabel = serviceTypeName ? `${serviceTypeName}: ${team.name}` : team.name || 'Team'
-
-    // Create team structural node
     const teamNodeId = `team-${teamId}`
+
     nodes.push({
       id: teamNodeId,
       name: team.name || 'Unnamed Team',
@@ -262,80 +237,39 @@ export async function GET() {
 
     if (leaders.length > 0) {
       for (const leader of leaders) {
-        const person = personMap.get(leader.personId)!
-        leaderPersonIds.add(leader.personId)
-        addContext(leader.personId, contextLabel)
-        treePersonIds.add(leader.personId)
-
-        nodes.push({
-          id: leader.personId,
-          name: person.name || 'Unknown',
-          role: 'shepherd',
-          nodeType: 'person',
-          supervisorId: teamNodeId,
-          flockCount: Math.ceil(nonLeaders.length / leaders.length),
-          lastCheckin: lastCheckin[leader.personId] || null,
-          isCurrentUser: false,
-          contextLabel,
-          warning: null,
-        })
+        nodes.push(personNode(
+          leader.personId, teamNodeId, 'shepherd', teamNodeId, contextLabel,
+          Math.ceil(nonLeaders.length / leaders.length),
+        ))
       }
-
       for (let i = 0; i < nonLeaders.length; i++) {
         const m = nonLeaders[i]
-        const person = personMap.get(m.personId)!
-        addContext(m.personId, contextLabel)
-        treePersonIds.add(m.personId)
-
         const assignedLeader = leaders[i % leaders.length]
-        nodes.push({
-          id: m.personId,
-          name: person.name || 'Unknown',
-          role: 'member',
-          nodeType: 'person',
-          supervisorId: assignedLeader.personId,
-          flockCount: 0,
-          lastCheckin: null,
-          isCurrentUser: false,
-          contextLabel,
-          warning: null,
-        })
+        const leaderNodeId = `${assignedLeader.personId}::${teamNodeId}`
+        nodes.push(personNode(m.personId, teamNodeId, 'member', leaderNodeId, contextLabel, 0))
       }
     } else {
       for (const m of validMembers) {
-        const person = personMap.get(m.personId)!
-        addContext(m.personId, contextLabel)
-        treePersonIds.add(m.personId)
-
-        nodes.push({
-          id: m.personId,
-          name: person.name || 'Unknown',
-          role: 'member',
-          nodeType: 'person',
-          supervisorId: teamNodeId,
-          flockCount: 0,
-          lastCheckin: null,
-          isCurrentUser: false,
-          contextLabel,
-          warning: null,
-        })
+        nodes.push(personNode(m.personId, teamNodeId, 'member', teamNodeId, contextLabel, 0))
       }
     }
   }
 
   // ── Manual shepherding relationships ──────────────────────
+  const manualShepherdIds = new Set<string>()
   for (const r of manualRelationships || []) {
     if (!personMap.has(r.shepherd_id) || !personMap.has(r.person_id)) continue
     if (r.shepherd_id === r.person_id) continue
 
-    // If shepherd isn't in tree yet, add them
-    if (!treePersonIds.has(r.shepherd_id)) {
+    const manualContextId = `manual-${r.shepherd_id}`
+
+    // Add a shepherd root node if not already added for this shepherd
+    if (!manualShepherdIds.has(r.shepherd_id)) {
+      manualShepherdIds.add(r.shepherd_id)
       const person = personMap.get(r.shepherd_id)!
-      const contexts = personContexts.get(r.shepherd_id)
-      leaderPersonIds.add(r.shepherd_id)
-      treePersonIds.add(r.shepherd_id)
       nodes.push({
-        id: r.shepherd_id,
+        id: `${r.shepherd_id}::manual`,
+        personId: r.shepherd_id,
         name: person.name || 'Unknown',
         role: 'shepherd',
         nodeType: 'person',
@@ -343,42 +277,33 @@ export async function GET() {
         flockCount: 0,
         lastCheckin: lastCheckin[r.shepherd_id] || null,
         isCurrentUser: false,
-        contextLabel: contexts ? [...contexts].slice(0, 3).join(', ') : 'Manual Shepherd',
+        contextLabel: 'Manual Assignment',
         warning: null,
       })
     }
 
-    // If person isn't in tree yet, add them under their shepherd
-    if (!treePersonIds.has(r.person_id)) {
-      const person = personMap.get(r.person_id)!
-      const contexts = personContexts.get(r.person_id)
-      treePersonIds.add(r.person_id)
-      nodes.push({
-        id: r.person_id,
-        name: person.name || 'Unknown',
-        role: 'member',
-        nodeType: 'person',
-        supervisorId: r.shepherd_id,
-        flockCount: 0,
-        lastCheckin: null,
-        isCurrentUser: false,
-        contextLabel: contexts ? [...contexts].slice(0, 3).join(', ') : null,
-        warning: null,
-      })
-    } else {
-      // Person already in tree — update their supervisor if it's a manual override
-      const existing = nodes.find(n => n.id === r.person_id)
-      if (existing && existing.nodeType === 'person') {
-        existing.supervisorId = r.shepherd_id
-      }
-    }
+    const shepherdTreeId = `${r.shepherd_id}::manual`
+    const person = personMap.get(r.person_id)!
+    nodes.push({
+      id: `${r.person_id}::${manualContextId}`,
+      personId: r.person_id,
+      name: person.name || 'Unknown',
+      role: 'member',
+      nodeType: 'person',
+      supervisorId: shepherdTreeId,
+      flockCount: 0,
+      lastCheckin: null,
+      isCurrentUser: false,
+      contextLabel: 'Manual Assignment',
+      warning: null,
+    })
 
-    // Update shepherd's flock count
-    const shepherdNode = nodes.find(n => n.id === r.shepherd_id)
-    if (shepherdNode) shepherdNode.flockCount = (shepherdNode.flockCount || 0) + 1
+    // Update shepherd flock count
+    const shepherdNode = nodes.find(n => n.id === shepherdTreeId)
+    if (shepherdNode) shepherdNode.flockCount++
   }
 
-  // ── Mark current user ────────────────────────────────────
+  // ── Mark current user (all appearances) ──────────────────
   let currentUserPersonId: string | null = null
   if (currentUser?.person_id && personMap.has(currentUser.person_id)) {
     currentUserPersonId = currentUser.person_id
@@ -387,27 +312,13 @@ export async function GET() {
     if (match) currentUserPersonId = match.id
   }
   if (currentUserPersonId) {
-    const userNode = nodes.find(n => n.id === currentUserPersonId)
-    if (userNode) userNode.isCurrentUser = true
-  }
-
-  // Deduplicate person nodes (a person can be in multiple groups/teams —
-  // keep them under the first group/team they appear in, but merge contexts)
-  const seenPersonIds = new Set<string>()
-  const deduped: any[] = []
-  for (const node of nodes) {
-    if (node.nodeType === 'person') {
-      if (seenPersonIds.has(node.id)) continue
-      seenPersonIds.add(node.id)
-      // Merge all contexts for this person
-      const contexts = personContexts.get(node.id)
-      if (contexts) node.contextLabel = [...contexts].slice(0, 3).join(', ')
+    for (const node of nodes) {
+      if (node.personId === currentUserPersonId) node.isCurrentUser = true
     }
-    deduped.push(node)
   }
 
   return NextResponse.json({
-    nodes: deduped,
+    nodes,
     currentUserRole: currentUser?.role,
     groupTypes: (groupTypes || []).map(gt => ({ id: gt.id, name: gt.name, is_tracked: gt.is_tracked })),
     serviceTypes: (serviceTypes || []).map(st => ({ id: st.id, name: st.name })),
