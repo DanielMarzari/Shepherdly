@@ -125,7 +125,7 @@ export const SYNC_RESOURCES: SyncResource[] = [
     table: 'group_memberships',
     endpoint: '',  // unused — nested
     supportsUpdatedSince: false,
-    syncStrategy: 'replace',
+    syncStrategy: 'upsert',
     onConflict: 'pco_id',
     isNested: true,
     nestedParentTable: 'groups',

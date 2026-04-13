@@ -5,7 +5,8 @@ import { useEffect, useRef, useState, useCallback } from 'react'
 interface TreeNode {
   id: string
   name: string
-  role: 'shepherd' | 'member'
+  role: 'shepherd' | 'member' | 'group' | 'team'
+  nodeType?: 'person' | 'group' | 'team'
   supervisorId: string | null
   flockCount: number
   lastCheckin: string | null
@@ -379,7 +380,7 @@ export default function ShepherdTree() {
         <div>
           <h1 className="font-serif text-xl" style={{ color: 'var(--primary)' }}>Shepherd Tree</h1>
           <p className="sans text-xs mt-0.5" style={{ color: 'var(--muted-foreground)' }}>
-            {nodes.filter(n => n.role === 'shepherd').length} shepherds · {nodes.filter(n => n.role === 'member').length} members · scroll to zoom · drag to pan
+            {nodes.filter(n => n.role === 'group').length} groups · {nodes.filter(n => n.role === 'team').length} teams · {nodes.filter(n => n.role === 'shepherd').length} shepherds · pinch to zoom
           </p>
         </div>
         <div className="flex items-center gap-3">
@@ -475,10 +476,52 @@ export default function ShepherdTree() {
 
             {/* Nodes */}
             {nodes.map(node => {
+              const isGroup = node.role === 'group' || node.role === 'team'
               const isShepherd = node.role === 'shepherd'
-              const color = isShepherd ? '#4a7c59' : '#6b7280'
+              const color = isGroup
+                ? (node.role === 'group' ? '#2563eb' : '#7c3aed')
+                : isShepherd ? '#4a7c59' : '#6b7280'
               const health = healthColor(node)
               const isSelected = selected?.id === node.id
+
+              if (isGroup) {
+                // ── Group/Team structural node ──
+                const icon = node.role === 'group' ? 'G' : 'T'
+                return (
+                  <g
+                    key={node.id}
+                    className="tree-node"
+                    transform={`translate(${node.x - NODE_W / 2}, ${node.y})`}
+                    style={{ cursor: 'pointer' }}
+                    onClick={() => setSelected(isSelected ? null : node)}
+                  >
+                    <rect x={0} y={0} width={NODE_W} height={NODE_H} rx={10}
+                      fill={color + '0C'} stroke={isSelected ? color : color + '40'}
+                      strokeWidth={isSelected ? 2.5 : 1.5} strokeDasharray="6 3"
+                      filter="url(#shadow)" />
+                    <rect x={0} y={0} width={4} height={NODE_H} rx={2}
+                      fill={color} style={{ clipPath: 'inset(0 0 0 0 round 10px 0 0 10px)' }} />
+                    {/* Icon badge */}
+                    <rect x={12} y={NODE_H / 2 - 14} width={28} height={28} rx={6} fill={color + '20'} />
+                    <text x={26} y={NODE_H / 2 + 1} textAnchor="middle" dominantBaseline="middle"
+                      fontSize={13} fontWeight="700" fontFamily="system-ui" fill={color}>
+                      {icon}
+                    </text>
+                    {/* Name */}
+                    <text x={48} y={NODE_H / 2 - 7} fontSize={12} fontWeight="600" fontFamily="Georgia, serif"
+                      fill="var(--foreground)">
+                      {node.name.slice(0, 24)}{node.name.length > 24 ? '…' : ''}
+                    </text>
+                    {/* Type + count */}
+                    <text x={48} y={NODE_H / 2 + 9} fontSize={10} fontFamily="system-ui"
+                      fill="var(--muted-foreground)">
+                      {node.contextLabel || (node.role === 'group' ? 'Group' : 'Team')} · {node.flockCount} members
+                    </text>
+                  </g>
+                )
+              }
+
+              // ── Person node ──
               const initials = node.name
                 .split(' ').map((p: string) => p[0]).join('').slice(0, 2).toUpperCase()
 
@@ -490,36 +533,18 @@ export default function ShepherdTree() {
                   style={{ cursor: 'pointer' }}
                   onClick={() => setSelected(isSelected ? null : node)}
                 >
-                  {/* Shadow layer for 3d effect */}
                   {viewMode === '3d' && (
-                    <rect
-                      x={4} y={4}
-                      width={NODE_W} height={NODE_H}
-                      rx={10}
-                      fill={color}
-                      opacity={0.15}
-                    />
+                    <rect x={4} y={4} width={NODE_W} height={NODE_H} rx={10}
+                      fill={color} opacity={0.15} />
                   )}
-
-                  {/* Card */}
-                  <rect
-                    x={0} y={0}
-                    width={NODE_W} height={NODE_H}
-                    rx={10}
+                  <rect x={0} y={0} width={NODE_W} height={NODE_H} rx={10}
                     fill={node.isCurrentUser ? color : 'white'}
                     stroke={isSelected ? color : node.isCurrentUser ? color : 'var(--border)'}
-                    strokeWidth={isSelected ? 2.5 : 1}
-                    filter="url(#shadow)"
-                  />
-
-                  {/* Left color bar */}
+                    strokeWidth={isSelected ? 2.5 : 1} filter="url(#shadow)" />
                   <rect x={0} y={0} width={4} height={NODE_H} rx={2}
                     fill={color} style={{ clipPath: 'inset(0 0 0 0 round 10px 0 0 10px)' }} />
 
-                  {/* Health dot — only for shepherds */}
                   {isShepherd && !node.warning && <circle cx={NODE_W - 10} cy={10} r={4} fill={health} />}
-
-                  {/* Warning indicator */}
                   {node.warning && (
                     <g transform={`translate(${NODE_W - 16}, 4)`}>
                       <polygon points="6,0 12,11 0,11" fill="#c17f3e" />
@@ -527,41 +552,33 @@ export default function ShepherdTree() {
                     </g>
                   )}
 
-                  {/* Avatar circle */}
                   <circle cx={28} cy={NODE_H / 2} r={18}
                     fill={node.isCurrentUser ? 'rgba(255,255,255,0.2)' : color + '18'} />
-                  <text x={28} y={NODE_H / 2 + 1}
-                    textAnchor="middle" dominantBaseline="middle"
+                  <text x={28} y={NODE_H / 2 + 1} textAnchor="middle" dominantBaseline="middle"
                     fontSize={11} fontWeight="600" fontFamily="system-ui"
                     fill={node.isCurrentUser ? 'white' : color}>
                     {initials}
                   </text>
 
-                  {/* Name */}
                   <text x={52} y={isShepherd ? NODE_H / 2 - 9 : NODE_H / 2 - 4}
                     fontSize={12} fontWeight="600" fontFamily="Georgia, serif"
-                    fill={node.isCurrentUser ? 'white' : 'var(--foreground)'}
-                    style={{ maxWidth: NODE_W - 60 }}>
+                    fill={node.isCurrentUser ? 'white' : 'var(--foreground)'}>
                     {node.name.slice(0, 24)}{node.name.length > 24 ? '…' : ''}
                   </text>
 
-                  {/* Shepherd: flock count + context. Member: context label */}
                   {isShepherd ? (
                     <>
-                      <text x={52} y={NODE_H / 2 + 6}
-                        fontSize={10} fontFamily="system-ui"
+                      <text x={52} y={NODE_H / 2 + 6} fontSize={10} fontFamily="system-ui"
                         fill={node.isCurrentUser ? 'rgba(255,255,255,0.75)' : 'var(--muted-foreground)'}>
                         {node.flockCount} in flock
                       </text>
-                      <text x={52} y={NODE_H / 2 + 19}
-                        fontSize={9} fontFamily="system-ui"
+                      <text x={52} y={NODE_H / 2 + 19} fontSize={9} fontFamily="system-ui"
                         fill={node.isCurrentUser ? 'rgba(255,255,255,0.6)' : 'var(--muted-foreground)'}>
                         {node.contextLabel ? node.contextLabel.slice(0, 34) : 'Shepherd'}
                       </text>
                     </>
                   ) : (
-                    <text x={52} y={NODE_H / 2 + 9}
-                      fontSize={10} fontFamily="system-ui"
+                    <text x={52} y={NODE_H / 2 + 9} fontSize={10} fontFamily="system-ui"
                       fill={node.isCurrentUser ? 'rgba(255,255,255,0.75)' : 'var(--muted-foreground)'}>
                       {node.contextLabel ? node.contextLabel.slice(0, 28) : 'Member'}
                     </text>
@@ -574,15 +591,20 @@ export default function ShepherdTree() {
 
         {/* Detail panel */}
         {selected && (() => {
+          const isGroup = selected.role === 'group' || selected.role === 'team'
           const isShepherd = selected.role === 'shepherd'
-          const detailColor = isShepherd ? '#4a7c59' : '#6b7280'
-          const initials = selected.name.split(' ').map((p: string) => p[0]).join('').slice(0, 2).toUpperCase()
+          const detailColor = isGroup
+            ? (selected.role === 'group' ? '#2563eb' : '#7c3aed')
+            : isShepherd ? '#4a7c59' : '#6b7280'
+          const initials = isGroup
+            ? (selected.role === 'group' ? 'G' : 'T')
+            : selected.name.split(' ').map((p: string) => p[0]).join('').slice(0, 2).toUpperCase()
           return (
             <div className="absolute right-4 top-4 w-72 bg-white rounded-2xl shadow-xl border p-5"
               style={{ borderColor: 'var(--border)' }}>
               <div className="flex items-start justify-between mb-4">
                 <div className="flex items-center gap-3">
-                  <div className="w-11 h-11 rounded-full flex items-center justify-center text-sm font-semibold sans"
+                  <div className={`w-11 h-11 ${isGroup ? 'rounded-lg' : 'rounded-full'} flex items-center justify-center text-sm font-semibold sans`}
                     style={{ background: detailColor + '20', color: detailColor }}>
                     {initials}
                   </div>
@@ -591,7 +613,7 @@ export default function ShepherdTree() {
                       {selected.name}
                     </div>
                     <div className="text-xs sans" style={{ color: 'var(--muted-foreground)' }}>
-                      {selected.contextLabel || (isShepherd ? 'Shepherd' : 'Member')}
+                      {selected.contextLabel || (isGroup ? (selected.role === 'group' ? 'Group' : 'Team') : isShepherd ? 'Shepherd' : 'Member')}
                     </div>
                   </div>
                 </div>
@@ -599,11 +621,11 @@ export default function ShepherdTree() {
                   className="text-lg leading-none" style={{ color: 'var(--muted-foreground)' }}>×</button>
               </div>
 
-              {/* Role badge + warning */}
+              {/* Role badge */}
               <div className="flex items-center gap-2 mb-4">
                 <span className="inline-block text-xs sans px-2.5 py-1 rounded-full font-medium"
                   style={{ background: detailColor + '15', color: detailColor }}>
-                  {isShepherd ? 'Shepherd' : 'Member'}
+                  {isGroup ? (selected.role === 'group' ? 'Group' : 'Team') : isShepherd ? 'Shepherd' : 'Member'}
                 </span>
                 {selected.warning && (
                   <span className="inline-block text-xs sans px-2.5 py-1 rounded-full font-medium"
@@ -613,9 +635,29 @@ export default function ShepherdTree() {
                 )}
               </div>
 
+              {/* Group/Team detail */}
+              {isGroup && (
+                <>
+                  <div className="rounded-xl p-3 mb-4" style={{ background: 'var(--muted)' }}>
+                    <div className="text-2xl font-serif text-center" style={{ color: 'var(--primary)' }}>
+                      {selected.flockCount}
+                    </div>
+                    <div className="text-xs sans text-center mt-0.5" style={{ color: 'var(--muted-foreground)' }}>
+                      Members
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => setConnecting({ shepherdId: selected.id, shepherdName: selected.name })}
+                    className="w-full text-center text-xs sans py-2 rounded-lg font-medium border"
+                    style={{ borderColor: 'var(--border)', color: 'var(--foreground)' }}>
+                    Add Members to Flock
+                  </button>
+                </>
+              )}
+
+              {/* Shepherd detail */}
               {isShepherd && (
                 <>
-                  {/* Stats */}
                   <div className="grid grid-cols-2 gap-3 mb-4">
                     <div className="rounded-xl p-3 text-center" style={{ background: 'var(--muted)' }}>
                       <div className="text-2xl font-serif" style={{ color: 'var(--primary)' }}>{selected.flockCount}</div>
@@ -627,7 +669,6 @@ export default function ShepherdTree() {
                     </div>
                   </div>
 
-                  {/* Health indicator */}
                   <div className="rounded-xl p-3 mb-4" style={{ background: 'var(--muted)' }}>
                     <div className="flex items-center justify-between mb-1.5">
                       <span className="text-xs sans font-medium" style={{ color: 'var(--foreground)' }}>Flock Health</span>
@@ -648,16 +689,6 @@ export default function ShepherdTree() {
                     </div>
                   </div>
 
-                  {/* Assign to shepherd (for unconnected leaders) */}
-                  {selected.warning && !connecting && (
-                    <button
-                      onClick={() => setConnecting({ shepherdId: '', shepherdName: '' })}
-                      className="w-full text-xs sans py-2 rounded-lg font-medium mb-3 border-2 border-dashed"
-                      style={{ borderColor: '#c17f3e', color: '#c17f3e' }}>
-                      Assign a Shepherd
-                    </button>
-                  )}
-
                   <div className="flex gap-2">
                     <a href={`/checkins?shepherd=${selected.id}`}
                       className="flex-1 text-center text-xs sans py-2 rounded-lg font-medium"
@@ -675,7 +706,7 @@ export default function ShepherdTree() {
               )}
 
               {/* Member: assign shepherd */}
-              {!isShepherd && !connecting && (
+              {!isShepherd && !isGroup && !connecting && (
                 <div className="flex gap-2">
                   <button
                     onClick={() => setConnecting({ shepherdId: '', shepherdName: '' })}
