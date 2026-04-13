@@ -106,6 +106,17 @@ function checkinLabel(node: TreeNode): string {
   return `${daysSince}d ago`
 }
 
+interface GroupTypeOption {
+  id: string
+  name: string
+  is_tracked: boolean
+}
+
+interface ServiceTypeOption {
+  id: string
+  name: string
+}
+
 export default function ShepherdTree() {
   const svgRef = useRef<SVGSVGElement>(null)
   const [nodes, setNodes] = useState<LayoutNode[]>([])
@@ -121,6 +132,10 @@ export default function ShepherdTree() {
   const [addSearch, setAddSearch] = useState('')
   const [addResults, setAddResults] = useState<{ id: string; name: string; pco_id: string | null }[]>([])
   const [currentUserRole, setCurrentUserRole] = useState<string | null>(null)
+  const [groupTypes, setGroupTypes] = useState<GroupTypeOption[]>([])
+  const [serviceTypes, setServiceTypes] = useState<ServiceTypeOption[]>([])
+  const [assignTab, setAssignTab] = useState<'person' | 'group_type' | 'service_type'>('person')
+  const [bulkAssigning, setBulkAssigning] = useState(false)
 
   // Pan & zoom state
   const [transform, setTransform] = useState({ x: 0, y: 60, scale: 1 })
@@ -135,6 +150,8 @@ export default function ShepherdTree() {
 
     setAllNodes(data.nodes || [])
     setCurrentUserRole(data.currentUserRole || null)
+    setGroupTypes(data.groupTypes || [])
+    setServiceTypes(data.serviceTypes || [])
     const laid = buildTree(data.nodes)
     setNodes(laid)
     setEdges(getAllEdges(laid))
@@ -594,69 +611,191 @@ export default function ShepherdTree() {
         {/* Connection search modal */}
         {connecting && selected && (
           <div className="absolute inset-0 flex items-center justify-center" style={{ background: 'rgba(0,0,0,0.3)' }}>
-            <div className="w-80 bg-white rounded-2xl shadow-xl border p-5" style={{ borderColor: 'var(--border)' }}>
+            <div className="w-96 bg-white rounded-2xl shadow-xl border p-5" style={{ borderColor: 'var(--border)' }}>
               <div className="flex items-center justify-between mb-3">
                 <h3 className="font-serif text-base" style={{ color: 'var(--primary)' }}>
                   {connecting.shepherdId
                     ? `Add to ${connecting.shepherdName}'s flock`
                     : `Assign shepherd for ${selected.name}`}
                 </h3>
-                <button onClick={() => { setConnecting(null); setSearchTerm('') }}
+                <button onClick={() => { setConnecting(null); setSearchTerm(''); setAssignTab('person') }}
                   className="text-lg leading-none" style={{ color: 'var(--muted-foreground)' }}>×</button>
               </div>
-              <input
-                type="text"
-                placeholder="Search by name..."
-                value={searchTerm}
-                onChange={e => setSearchTerm(e.target.value)}
-                className="w-full px-3 py-2 rounded-lg border text-sm sans mb-3"
-                style={{ borderColor: 'var(--border)', color: 'var(--foreground)' }}
-                autoFocus
-              />
-              <div className="max-h-48 overflow-y-auto space-y-1">
-                {allNodes
-                  .filter(n => {
-                    if (!searchTerm) return false
-                    if (n.id === selected.id) return false
-                    const matchesSearch = n.name.toLowerCase().includes(searchTerm.toLowerCase())
-                    if (connecting.shepherdId) {
-                      // Adding someone to a shepherd's flock — show anyone
-                      return matchesSearch
-                    } else {
-                      // Assigning a shepherd — only show other shepherds
-                      return matchesSearch && n.role === 'shepherd'
-                    }
-                  })
-                  .slice(0, 10)
-                  .map(n => (
-                    <button key={n.id}
-                      onClick={() => {
-                        if (connecting.shepherdId) {
-                          assignShepherd(n.id, connecting.shepherdId)
-                        } else {
-                          assignShepherd(selected.id, n.id)
-                        }
-                      }}
-                      className="w-full flex items-center gap-3 px-3 py-2 rounded-lg text-left hover:bg-gray-50 transition-colors">
-                      <div className="w-7 h-7 rounded-full flex items-center justify-center text-xs font-medium sans shrink-0"
-                        style={{ background: n.role === 'shepherd' ? '#4a7c5918' : '#6b728018', color: n.role === 'shepherd' ? '#4a7c59' : '#6b7280' }}>
-                        {n.name.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase()}
-                      </div>
-                      <div>
-                        <div className="text-sm sans font-medium" style={{ color: 'var(--foreground)' }}>{n.name}</div>
-                        <div className="text-xs sans" style={{ color: 'var(--muted-foreground)' }}>
-                          {n.contextLabel || (n.role === 'shepherd' ? 'Shepherd' : 'Member')}
-                        </div>
-                      </div>
+
+              {/* Tabs: Person | Group Type | Service Type (only when adding to a shepherd's flock) */}
+              {connecting.shepherdId && ['super_admin', 'staff'].includes(currentUserRole || '') && (
+                <div className="flex rounded-lg overflow-hidden border mb-3" style={{ borderColor: 'var(--border)' }}>
+                  {([
+                    { key: 'person' as const, label: 'Person' },
+                    { key: 'group_type' as const, label: 'Group Type' },
+                    { key: 'service_type' as const, label: 'Service Type' },
+                  ]).map(tab => (
+                    <button key={tab.key} onClick={() => setAssignTab(tab.key)}
+                      className="flex-1 px-2 py-1.5 text-xs font-medium sans transition-colors"
+                      style={{
+                        background: assignTab === tab.key ? 'var(--primary)' : 'white',
+                        color: assignTab === tab.key ? 'white' : 'var(--muted-foreground)',
+                      }}>
+                      {tab.label}
                     </button>
                   ))}
-                {searchTerm && allNodes.filter(n => n.id !== selected.id && n.name.toLowerCase().includes(searchTerm.toLowerCase())).length === 0 && (
-                  <p className="text-xs sans text-center py-4" style={{ color: 'var(--muted-foreground)' }}>No matches found</p>
-                )}
-                {!searchTerm && (
-                  <p className="text-xs sans text-center py-4" style={{ color: 'var(--muted-foreground)' }}>Type a name to search</p>
-                )}
-              </div>
+                </div>
+              )}
+
+              {/* Person search tab */}
+              {assignTab === 'person' && (
+                <>
+                  <input
+                    type="text"
+                    placeholder="Search by name..."
+                    value={searchTerm}
+                    onChange={e => setSearchTerm(e.target.value)}
+                    className="w-full px-3 py-2 rounded-lg border text-sm sans mb-3"
+                    style={{ borderColor: 'var(--border)', color: 'var(--foreground)' }}
+                    autoFocus
+                  />
+                  <div className="max-h-48 overflow-y-auto space-y-1">
+                    {allNodes
+                      .filter(n => {
+                        if (!searchTerm) return false
+                        if (n.id === selected.id) return false
+                        const matchesSearch = n.name.toLowerCase().includes(searchTerm.toLowerCase())
+                        if (connecting.shepherdId) {
+                          return matchesSearch
+                        } else {
+                          return matchesSearch && n.role === 'shepherd'
+                        }
+                      })
+                      .slice(0, 10)
+                      .map(n => (
+                        <button key={n.id}
+                          onClick={() => {
+                            if (connecting.shepherdId) {
+                              assignShepherd(n.id, connecting.shepherdId)
+                            } else {
+                              assignShepherd(selected.id, n.id)
+                            }
+                          }}
+                          className="w-full flex items-center gap-3 px-3 py-2 rounded-lg text-left hover:bg-gray-50 transition-colors">
+                          <div className="w-7 h-7 rounded-full flex items-center justify-center text-xs font-medium sans shrink-0"
+                            style={{ background: n.role === 'shepherd' ? '#4a7c5918' : '#6b728018', color: n.role === 'shepherd' ? '#4a7c59' : '#6b7280' }}>
+                            {n.name.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase()}
+                          </div>
+                          <div>
+                            <div className="text-sm sans font-medium" style={{ color: 'var(--foreground)' }}>{n.name}</div>
+                            <div className="text-xs sans" style={{ color: 'var(--muted-foreground)' }}>
+                              {n.contextLabel || (n.role === 'shepherd' ? 'Shepherd' : 'Member')}
+                            </div>
+                          </div>
+                        </button>
+                      ))}
+                    {searchTerm && allNodes.filter(n => n.id !== selected.id && n.name.toLowerCase().includes(searchTerm.toLowerCase())).length === 0 && (
+                      <p className="text-xs sans text-center py-4" style={{ color: 'var(--muted-foreground)' }}>No matches found</p>
+                    )}
+                    {!searchTerm && (
+                      <p className="text-xs sans text-center py-4" style={{ color: 'var(--muted-foreground)' }}>Type a name to search</p>
+                    )}
+                  </div>
+                </>
+              )}
+
+              {/* Group Type bulk assign tab */}
+              {assignTab === 'group_type' && connecting.shepherdId && (
+                <div className="max-h-64 overflow-y-auto space-y-1">
+                  <p className="text-xs sans mb-2" style={{ color: 'var(--muted-foreground)' }}>
+                    Assign all members of a group type to {connecting.shepherdName}
+                  </p>
+                  {groupTypes.length === 0 && (
+                    <p className="text-xs sans text-center py-4" style={{ color: 'var(--muted-foreground)' }}>No group types found. Sync from PCO first.</p>
+                  )}
+                  {groupTypes.map(gt => (
+                    <button key={gt.id}
+                      disabled={bulkAssigning}
+                      onClick={async () => {
+                        setBulkAssigning(true)
+                        try {
+                          const res = await fetch('/api/tree', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                              action: 'bulk_assign',
+                              shepherd_id: connecting.shepherdId,
+                              group_type_id: gt.id,
+                            }),
+                          })
+                          const data = await res.json()
+                          alert(`Assigned ${data.count || 0} members from "${gt.name}" to ${connecting.shepherdName}`)
+                          setConnecting(null)
+                          setAssignTab('person')
+                          fetchTree()
+                        } finally {
+                          setBulkAssigning(false)
+                        }
+                      }}
+                      className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-left hover:bg-gray-50 transition-colors">
+                      <div className="w-8 h-8 rounded-lg flex items-center justify-center text-xs font-bold sans shrink-0"
+                        style={{ background: '#4a7c5918', color: '#4a7c59' }}>
+                        G
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="text-sm sans font-medium truncate" style={{ color: 'var(--foreground)' }}>{gt.name}</div>
+                        <div className="text-xs sans" style={{ color: 'var(--muted-foreground)' }}>
+                          {gt.is_tracked ? 'Tracked' : 'Not tracked'}
+                        </div>
+                      </div>
+                      {bulkAssigning && <span className="text-xs sans" style={{ color: 'var(--muted-foreground)' }}>Assigning…</span>}
+                    </button>
+                  ))}
+                </div>
+              )}
+
+              {/* Service Type bulk assign tab */}
+              {assignTab === 'service_type' && connecting.shepherdId && (
+                <div className="max-h-64 overflow-y-auto space-y-1">
+                  <p className="text-xs sans mb-2" style={{ color: 'var(--muted-foreground)' }}>
+                    Assign all members of a service type to {connecting.shepherdName}
+                  </p>
+                  {serviceTypes.length === 0 && (
+                    <p className="text-xs sans text-center py-4" style={{ color: 'var(--muted-foreground)' }}>No service types found. Sync from PCO first.</p>
+                  )}
+                  {serviceTypes.map(st => (
+                    <button key={st.id}
+                      disabled={bulkAssigning}
+                      onClick={async () => {
+                        setBulkAssigning(true)
+                        try {
+                          const res = await fetch('/api/tree', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                              action: 'bulk_assign',
+                              shepherd_id: connecting.shepherdId,
+                              service_type_id: st.id,
+                            }),
+                          })
+                          const data = await res.json()
+                          alert(`Assigned ${data.count || 0} members from "${st.name}" to ${connecting.shepherdName}`)
+                          setConnecting(null)
+                          setAssignTab('person')
+                          fetchTree()
+                        } finally {
+                          setBulkAssigning(false)
+                        }
+                      }}
+                      className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-left hover:bg-gray-50 transition-colors">
+                      <div className="w-8 h-8 rounded-lg flex items-center justify-center text-xs font-bold sans shrink-0"
+                        style={{ background: '#3b6ea518', color: '#3b6ea5' }}>
+                        S
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="text-sm sans font-medium truncate" style={{ color: 'var(--foreground)' }}>{st.name}</div>
+                        <div className="text-xs sans" style={{ color: 'var(--muted-foreground)' }}>Service Type</div>
+                      </div>
+                      {bulkAssigning && <span className="text-xs sans" style={{ color: 'var(--muted-foreground)' }}>Assigning…</span>}
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
           </div>
         )}
