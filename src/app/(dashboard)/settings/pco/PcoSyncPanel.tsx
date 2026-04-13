@@ -51,6 +51,8 @@ export default function PcoSyncPanel() {
   const [loading, setLoading] = useState(true)
   const [syncing, setSyncing] = useState(false)
   const [progress, setProgress] = useState<SyncProgress | null>(null)
+  const [debugData, setDebugData] = useState<any>(null)
+  const [debugLoading, setDebugLoading] = useState(false)
   const abortRef = useRef(false)
 
   const fetchStatus = useCallback(async () => {
@@ -300,9 +302,6 @@ export default function PcoSyncPanel() {
   }
 
   // ── Debug handler ──────────────────────────────────────────
-  const [debugData, setDebugData] = useState<any>(null)
-  const [debugLoading, setDebugLoading] = useState(false)
-
   const handleDebug = async () => {
     setDebugLoading(true)
     setDebugData(null)
