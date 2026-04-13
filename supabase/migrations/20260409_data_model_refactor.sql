@@ -233,6 +233,17 @@ CREATE INDEX IF NOT EXISTS idx_sr_person_id ON shepherding_relationships(person_
 CREATE INDEX IF NOT EXISTS idx_sr_shepherd_id ON shepherding_relationships(shepherd_id);
 CREATE INDEX IF NOT EXISTS idx_sr_context ON shepherding_relationships(context_type, context_id);
 
+-- Fix partial unique indexes that break ON CONFLICT upserts
+DROP INDEX IF EXISTS groups_pco_id_idx;
+CREATE UNIQUE INDEX groups_pco_id_idx ON groups (pco_id);
+DROP INDEX IF EXISTS teams_pco_id_idx;
+CREATE UNIQUE INDEX teams_pco_id_idx ON teams (pco_id);
+DROP INDEX IF EXISTS group_memberships_pco_id_idx;
+CREATE UNIQUE INDEX group_memberships_pco_id_idx ON group_memberships (pco_id);
+DROP INDEX IF EXISTS team_memberships_pco_id_idx;
+CREATE UNIQUE INDEX team_memberships_pco_id_idx ON team_memberships (pco_id);
+DROP INDEX IF EXISTS people_pco_id_idx;  -- duplicate partial; idx_people_pco_id_unique already exists
+
 -- New table indexes
 CREATE INDEX IF NOT EXISTS idx_group_types_church ON group_types(church_id);
 CREATE INDEX IF NOT EXISTS idx_group_apps_church ON group_applications(church_id);
