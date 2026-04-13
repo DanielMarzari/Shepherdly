@@ -21,7 +21,7 @@ interface LayoutNode extends TreeNode {
   depth: number
 }
 
-const NODE_W = 180
+const NODE_W = 220
 const NODE_H = 72
 const H_GAP = 40
 const V_GAP = 100
@@ -250,17 +250,98 @@ export default function ShepherdTree() {
   }
   const onMouseUp = () => { dragging.current = false }
 
-  // Attach wheel handler natively with { passive: false } to allow preventDefault
+  // Attach wheel + touch handlers natively with { passive: false } to allow preventDefault
   useEffect(() => {
     const el = svgRef.current
     if (!el) return
+
+    // Mouse wheel zoom
     const handleWheel = (e: WheelEvent) => {
       e.preventDefault()
-      const delta = e.deltaY > 0 ? 0.9 : 1.1
+      e.stopPropagation()
+      // Trackpad pinch sends ctrlKey + deltaY; regular scroll sends just deltaY
+      const isPinch = e.ctrlKey
+      const sensitivity = isPinch ? 0.01 : 0.002
+      const delta = 1 - e.deltaY * sensitivity
       setTransform(t => ({ ...t, scale: Math.min(3, Math.max(0.05, t.scale * delta)) }))
     }
+
+    // Touch: pinch-to-zoom + drag
+    let lastTouchDist = 0
+    let lastTouchCenter = { x: 0, y: 0 }
+    let touching = false
+
+    const getTouchDist = (touches: TouchList) => {
+      if (touches.length < 2) return 0
+      const dx = touches[0].clientX - touches[1].clientX
+      const dy = touches[0].clientY - touches[1].clientY
+      return Math.sqrt(dx * dx + dy * dy)
+    }
+
+    const getTouchCenter = (touches: TouchList) => {
+      if (touches.length < 2) return { x: touches[0].clientX, y: touches[0].clientY }
+      return {
+        x: (touches[0].clientX + touches[1].clientX) / 2,
+        y: (touches[0].clientY + touches[1].clientY) / 2,
+      }
+    }
+
+    const handleTouchStart = (e: TouchEvent) => {
+      if (e.touches.length >= 2) {
+        e.preventDefault()
+        lastTouchDist = getTouchDist(e.touches)
+        lastTouchCenter = getTouchCenter(e.touches)
+        touching = true
+      } else if (e.touches.length === 1) {
+        lastTouchCenter = { x: e.touches[0].clientX, y: e.touches[0].clientY }
+        touching = true
+      }
+    }
+
+    const handleTouchMove = (e: TouchEvent) => {
+      if (!touching) return
+      e.preventDefault()
+
+      if (e.touches.length >= 2) {
+        // Pinch zoom
+        const dist = getTouchDist(e.touches)
+        if (lastTouchDist > 0) {
+          const ratio = dist / lastTouchDist
+          setTransform(t => ({ ...t, scale: Math.min(3, Math.max(0.05, t.scale * ratio)) }))
+        }
+        lastTouchDist = dist
+
+        // Pan with two fingers
+        const center = getTouchCenter(e.touches)
+        const dx = center.x - lastTouchCenter.x
+        const dy = center.y - lastTouchCenter.y
+        setTransform(t => ({ ...t, x: t.x + dx / t.scale, y: t.y + dy / t.scale }))
+        lastTouchCenter = center
+      } else if (e.touches.length === 1) {
+        // Single finger drag to pan
+        const dx = e.touches[0].clientX - lastTouchCenter.x
+        const dy = e.touches[0].clientY - lastTouchCenter.y
+        lastTouchCenter = { x: e.touches[0].clientX, y: e.touches[0].clientY }
+        setTransform(t => ({ ...t, x: t.x + dx / t.scale, y: t.y + dy / t.scale }))
+      }
+    }
+
+    const handleTouchEnd = () => {
+      lastTouchDist = 0
+      touching = false
+    }
+
     el.addEventListener('wheel', handleWheel, { passive: false })
-    return () => el.removeEventListener('wheel', handleWheel)
+    el.addEventListener('touchstart', handleTouchStart, { passive: false })
+    el.addEventListener('touchmove', handleTouchMove, { passive: false })
+    el.addEventListener('touchend', handleTouchEnd)
+
+    return () => {
+      el.removeEventListener('wheel', handleWheel)
+      el.removeEventListener('touchstart', handleTouchStart)
+      el.removeEventListener('touchmove', handleTouchMove)
+      el.removeEventListener('touchend', handleTouchEnd)
+    }
   }, [])
 
   if (loading) return (
@@ -349,7 +430,7 @@ export default function ShepherdTree() {
       </div>
 
       {/* Tree canvas */}
-      <div className="flex-1 relative overflow-hidden" style={{ background: 'var(--muted)' }}>
+      <div className="flex-1 relative overflow-hidden" style={{ background: 'var(--muted)', touchAction: 'none' }}>
         <svg
           ref={svgRef}
           className="w-full h-full cursor-grab active:cursor-grabbing select-none"
@@ -461,7 +542,7 @@ export default function ShepherdTree() {
                     fontSize={12} fontWeight="600" fontFamily="Georgia, serif"
                     fill={node.isCurrentUser ? 'white' : 'var(--foreground)'}
                     style={{ maxWidth: NODE_W - 60 }}>
-                    {node.name.slice(0, 18)}{node.name.length > 18 ? '…' : ''}
+                    {node.name.slice(0, 24)}{node.name.length > 24 ? '…' : ''}
                   </text>
 
                   {/* Shepherd: flock count + context. Member: context label */}
@@ -475,14 +556,14 @@ export default function ShepherdTree() {
                       <text x={52} y={NODE_H / 2 + 19}
                         fontSize={9} fontFamily="system-ui"
                         fill={node.isCurrentUser ? 'rgba(255,255,255,0.6)' : 'var(--muted-foreground)'}>
-                        {node.contextLabel ? node.contextLabel.slice(0, 28) : 'Shepherd'}
+                        {node.contextLabel ? node.contextLabel.slice(0, 34) : 'Shepherd'}
                       </text>
                     </>
                   ) : (
                     <text x={52} y={NODE_H / 2 + 9}
                       fontSize={10} fontFamily="system-ui"
                       fill={node.isCurrentUser ? 'rgba(255,255,255,0.75)' : 'var(--muted-foreground)'}>
-                      {node.contextLabel ? node.contextLabel.slice(0, 22) : 'Member'}
+                      {node.contextLabel ? node.contextLabel.slice(0, 28) : 'Member'}
                     </text>
                   )}
                 </g>
@@ -803,7 +884,7 @@ export default function ShepherdTree() {
         {/* Add person modal */}
         {addingPerson && (
           <div className="absolute inset-0 flex items-center justify-center" style={{ background: 'rgba(0,0,0,0.3)' }}>
-            <div className="w-96 bg-white rounded-2xl shadow-xl border p-5" style={{ borderColor: 'var(--border)' }}>
+            <div className="w-[480px] bg-white rounded-2xl shadow-xl border p-5" style={{ borderColor: 'var(--border)' }}>
               <div className="flex items-center justify-between mb-3">
                 <h3 className="font-serif text-base" style={{ color: 'var(--primary)' }}>Add Person to Tree</h3>
                 <button onClick={() => { setAddingPerson(false); setAddSearch(''); setAddResults([]) }}
@@ -842,7 +923,7 @@ export default function ShepherdTree() {
                           As Root
                         </button>
                         <select
-                          className="text-xs sans px-1 py-1 rounded border"
+                          className="text-xs sans px-2 py-1 rounded border max-w-[180px]"
                           style={{ borderColor: 'var(--border)', color: 'var(--foreground)' }}
                           defaultValue=""
                           onChange={e => { if (e.target.value) addPersonToTree(p.id, e.target.value) }}>

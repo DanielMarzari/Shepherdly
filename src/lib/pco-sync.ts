@@ -225,8 +225,9 @@ export const SYNC_RESOURCES: SyncResource[] = [
     endpoint: '/check-ins/v2/check_ins',
     supportsUpdatedSince: false,
     syncStrategy: 'upsert',
-    onConflict: 'pco_event_id',
+    onConflict: 'pco_id',
     mapRow: (c) => ({
+      pco_id: c.id,
       pco_event_id: c.id,
       pco_person_id: c.relationships?.person?.data?.id || null,
       event_date: c.attributes.created_at?.substring(0, 10) || null,
