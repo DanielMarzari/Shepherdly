@@ -2,7 +2,6 @@
 
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
-import { createClient } from '@/lib/supabase/client'
 import { useRouter } from 'next/navigation'
 import type { User } from '@/types'
 
@@ -45,8 +44,7 @@ export default function Sidebar({ user }: { user: User }) {
   const router = useRouter()
 
   const handleSignOut = async () => {
-    const supabase = createClient()
-    await supabase.auth.signOut()
+    await fetch('/api/auth/logout', { method: 'POST' })
     router.push('/login')
   }
 

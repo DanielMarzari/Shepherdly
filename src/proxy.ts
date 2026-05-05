@@ -1,46 +1,33 @@
-import { createServerClient } from '@supabase/ssr'
 import { NextResponse, type NextRequest } from 'next/server'
 
+/**
+ * Edge middleware. Gates protected routes on the presence of a `sid`
+ * cookie — the actual session validation happens in the route handlers
+ * (which can hit the SQLite DB; this proxy can't, since middleware
+ * runs in the Edge runtime where better-sqlite3 isn't available).
+ *
+ * The cookie-presence check is enough for redirect UX. If a stale
+ * cookie reaches a route, the route's getCurrentUser() returns null
+ * and the route returns 401 itself.
+ */
 export async function proxy(request: NextRequest) {
-  let supabaseResponse = NextResponse.next({ request })
-
-  const supabase = createServerClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-    {
-      cookies: {
-        getAll() { return request.cookies.getAll() },
-        setAll(cookiesToSet) {
-          cookiesToSet.forEach(({ name, value }) => request.cookies.set(name, value))
-          supabaseResponse = NextResponse.next({ request })
-          cookiesToSet.forEach(({ name, value, options }) =>
-            supabaseResponse.cookies.set(name, value, options)
-          )
-        },
-      },
-    }
-  )
-
-  // Use getSession() for fast local JWT check (no network round-trip).
-  // The layout's getUser() call does the authoritative server-side check.
-  const { data: { session } } = await supabase.auth.getSession()
-
+  const sid = request.cookies.get('sid')?.value
   const { pathname } = request.nextUrl
 
-  // Public routes
-  if (pathname.startsWith('/login') || pathname.startsWith('/auth') || pathname.startsWith('/api/auth')) {
-    if (session && pathname === '/login') {
+  // Public routes — login, the auth API, public pages.
+  if (pathname.startsWith('/login') || pathname.startsWith('/api/auth')) {
+    if (sid && pathname === '/login') {
       return NextResponse.redirect(new URL('/dashboard', request.url))
     }
-    return supabaseResponse
+    return NextResponse.next({ request })
   }
 
-  // Protected routes — redirect to login if not authenticated
-  if (!session) {
+  // Protected routes — redirect to login if no session cookie.
+  if (!sid) {
     return NextResponse.redirect(new URL('/login', request.url))
   }
 
-  return supabaseResponse
+  return NextResponse.next({ request })
 }
 
 export const config = {

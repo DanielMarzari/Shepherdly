@@ -1,9 +1,16 @@
-import { createClient } from '@supabase/supabase-js'
+/*
+ * Drop-in replacement for the service-role admin client.
+ *
+ * In Supabase, the admin client bypassed RLS. With SQLite + app-layer
+ * tenancy there's no equivalent privilege boundary — every query
+ * already runs against the same DB without any row-level filtering.
+ * Returning the same shimmed client preserves the existing contract:
+ * admin code paths still work; they just don't gain any extra power
+ * they didn't already have.
+ */
+
+import { sqliteClient } from '../supabase-shim'
 
 export function createAdminClient() {
-  return createClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.SUPABASE_SERVICE_ROLE_KEY!,
-    { auth: { autoRefreshToken: false, persistSession: false } }
-  )
+  return sqliteClient()
 }

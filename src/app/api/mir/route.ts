@@ -14,7 +14,7 @@ export async function GET() {
     .from('ministry_impact_reports')
     .select('*')
     .eq('church_id', appUser.church_id!)
-    .order('reporting_period_end', { ascending: false, nullsFirst: false })
+    .order('reporting_period_end', { ascending: false })
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
   return NextResponse.json({ reports: reports || [], userRole: appUser.role })

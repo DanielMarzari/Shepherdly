@@ -4,5 +4,13 @@
       "type": "http",
       "url": "https://mcp.supabase.com/mcp?project_ref=boxtnieqkdwoxyxmuvtl"
     }
+  },
+  "permissions": {
+    "allow": [
+      "Bash(cat /Users/dmarzari/Documents/Server/github-auth.pat)",
+      "Bash(GH_TOKEN=* gh:*)",
+      "Bash(git push https://x-access-token:*@github.com/DanielMarzari/*)",
+      "Bash(git remote add * https://x-access-token:*@github.com/DanielMarzari/*)"
+    ]
   }
 }

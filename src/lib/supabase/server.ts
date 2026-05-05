@@ -1,22 +1,12 @@
-import { createServerClient } from '@supabase/ssr'
-import { cookies } from 'next/headers'
+/*
+ * Drop-in replacement for the old @supabase/ssr server client.
+ *
+ * Returns the SQLite-backed shim; the chain API is identical so the
+ * 25+ API routes that import from here keep working unchanged.
+ */
+
+import { sqliteClient } from '../supabase-shim'
 
 export async function createClient() {
-  const cookieStore = await cookies()
-  return createServerClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-    {
-      cookies: {
-        getAll() { return cookieStore.getAll() },
-        setAll(cookiesToSet) {
-          try {
-            cookiesToSet.forEach(({ name, value, options }) =>
-              cookieStore.set(name, value, options)
-            )
-          } catch {}
-        },
-      },
-    }
-  )
+  return sqliteClient()
 }
