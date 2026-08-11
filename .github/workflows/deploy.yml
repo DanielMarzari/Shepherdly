@@ -38,23 +38,24 @@ jobs:
       - name: Deploy
         run: |
           rsync -avz --delete --exclude='*.db' --exclude='*.db-wal' --exclude='*.db-shm' \
-            -e "ssh -i ~/.ssh/deploy_key" \
+            -e "ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/tmp/known_hosts_tailnet" \
             .next/standalone/ \
             ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}:/var/www/apps/shepherdly/
 
           rsync -avz \
-            -e "ssh -i ~/.ssh/deploy_key" \
+            -e "ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/tmp/known_hosts_tailnet" \
             .next/static/ \
             ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}:/var/www/apps/shepherdly/.next/static/
 
           if [ -d "public" ]; then
             rsync -avz \
-              -e "ssh -i ~/.ssh/deploy_key" \
+              -e "ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/tmp/known_hosts_tailnet" \
               public/ \
               ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}:/var/www/apps/shepherdly/public/
           fi
 
-          ssh -i ~/.ssh/deploy_key ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }} \
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/tmp/known_hosts_tailnet ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }} \
             'export NVM_DIR="$HOME/.nvm" && [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh" && cd /var/www/apps && (pm2 restart ecosystem.config.js --only shepherdly --update-env || pm2 start ecosystem.config.js --only shepherdly) && pm2 save'
+
 
 
